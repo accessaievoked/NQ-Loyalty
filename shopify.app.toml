@@ -1,0 +1,54 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "d944697f55586a80d605cdc446bc5a98"
+name = "LoyaltyApp"
+application_url = "https://example.com"
+embedded = true
+
+[access_scopes]
+# read_customers / read_orders: identify shoppers and award points on orders
+# write_discounts: create the discount codes shoppers get when they redeem points
+# read_products: product mirror; read_fulfillments: delivery confirmation events
+scopes = "read_customers,read_orders,read_products,write_discounts,read_fulfillments"
+
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks"
+  topics = [
+    "orders/paid",
+    "orders/fulfilled",
+    "orders/cancelled",
+    "refunds/create",
+    "fulfillment_events/create",
+    "customers/create",
+    "customers/update",
+    "products/update",
+    "products/delete"
+  ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+# Storefront requests (/apps/loyalty/*) are forwarded here with a signed query string.
+[app_proxy]
+url = "https://example.com/proxy"
+subpath = "loyalty"
+prefix = "apps"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true

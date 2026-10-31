@@ -1,0 +1,524 @@
+// Loyalty app schema.
+//
+// Tenancy: every business table hangs off `Store` with `onDelete: Cascade`, so deleting a
+// store row removes all of its customers, orders, ledger, rewards, settings and email logs.
+// `Session` (owned by Shopify's session storage library) is the one exception — it has no FK
+// because it is written before a Store row exists; `deleteStore()` in app/services/store.server.js
+// removes it in the same transaction.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+}
+
+// ---------------------------------------------------------------------------------------
+// Store (tenant root)
+// ---------------------------------------------------------------------------------------
+
+model Store {
+  id            String    @id @default(cuid())
+  shop          String    @unique // e.g. my-shop.myshopify.com
+  name          String?
+  email         String?
+  currency      String    @default("USD")
+  scopes        String?
+  installedAt   DateTime  @default(now())
+  uninstalledAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  settings       StoreSettings?
+  customers      Customer[]
+  products       Product[]
+  orders         Order[]
+  earnRules      EarnRule[]
+  rewards        Reward[]
+  awards         PointsAward[]
+  transactions   PointsTransaction[]
+  redemptions    Redemption[]
+  notifications  Notification[]
+  otpChallenges  OtpChallenge[]
+  sessions       LoyaltySession[]
+  referrals      Referral[]
+  integrations   Integration[]
+  emailTemplates EmailTemplate[]
+}
+
+enum EarnTrigger {
+  PAID
+  FULFILLED
+  DELIVERED
+}
+
+enum DisplayMode {
+  WIDGET
+  PAGE
+}
+
+model StoreSettings {
+  id      String @id @default(cuid())
+  storeId String @unique
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  // Earning (purchase points). Detailed per-rule values live in EarnRule.
+  earnTrigger EarnTrigger @default(PAID)
+  // Days to wait after the trigger before points are credited. 0 = credit immediately.
+  holdDays    Int         @default(0)
+  // Days until earned points expire. 0 = never.
+  expiryDays  Int         @default(0)
+
+  // Redemption
+  minRedeemPoints Int @default(100)
+
+  // Notifications
+  emailsEnabled      Boolean @default(true)
+  notifyPointsEarned Boolean @default(true)
+  notifyRedeemed     Boolean @default(true)
+  notifyExpiring     Boolean @default(true)
+  expiryReminderDays Int     @default(7)
+  senderName         String?
+  replyTo            String?
+
+  // Reporting currency: admin reports (analytics, referral revenue) can be shown converted from
+  // the store's currency. Rewards/discounts and everything customers see stay in the store currency.
+  displayCurrency String?
+  fxRate          Decimal?  @db.Decimal(18, 8) // 1 unit of store currency = fxRate units of displayCurrency
+  fxRateAt        DateTime?
+  fxPair          String? // e.g. "USD>INR": which pair fxRate belongs to
+  fxManual        Boolean   @default(false) // merchant typed the rate instead of using the live one
+
+  // Storefront presentation
+  displayMode  DisplayMode @default(WIDGET)
+  widgetConfig Json? // theme + blocks document, see app/lib/widget/defaults.js
+
+  // Developer source: the full CSS and HTML shells for this store's widget. When enabled they
+  // replace the generated ones. `devLastGood` is a copy the merchant marked as working (or the
+  // generated default); `devPrevious` is whatever was live before the last save.
+  devEnabled   Boolean   @default(false)
+  devCss       String?   @db.Text
+  devShell     String?   @db.Text
+  devPageShell String?   @db.Text
+  devUpdatedAt DateTime?
+  devLastGood  Json?
+  devPrevious  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------------------
+// Catalog + orders (mirrors of Shopify data we need)
+// ---------------------------------------------------------------------------------------
+
+model Product {
+  id               String   @id @default(cuid())
+  storeId          String
+  store            Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  shopifyProductId String
+  title            String
+  handle           String?
+  imageUrl         String?
+  status           String?
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+
+  @@unique([storeId, shopifyProductId])
+}
+
+model Customer {
+  id                String   @id @default(cuid())
+  storeId           String
+  store             Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  shopifyCustomerId String?
+  email             String?
+  emailVerified     Boolean  @default(false)
+  phone             String?
+  firstName         String?
+  lastName          String?
+  // Denormalised from the ledger for fast reads. The ledger is the source of truth.
+  pointsBalance     Int      @default(0)
+  lifetimePoints    Int      @default(0)
+  emailOptOut       Boolean  @default(false)
+  // Shareable referral code, created the first time the customer asks for it.
+  referralCode      String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  orders           Order[]
+  awards           PointsAward[]
+  transactions     PointsTransaction[]
+  redemptions      Redemption[]
+  notifications    Notification[]
+  sessions         LoyaltySession[]
+  referralsMade    Referral[]          @relation("Referrer")
+  referralReceived Referral?           @relation("Referee")
+
+  @@unique([storeId, shopifyCustomerId])
+  // One loyalty account per email per store (OTP accounts have no Shopify id yet).
+  @@unique([storeId, email])
+  @@unique([storeId, referralCode])
+  @@index([storeId, email])
+  @@index([storeId, lifetimePoints])
+}
+
+model Order {
+  id              String    @id @default(cuid())
+  storeId         String
+  store           Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId      String?
+  customer        Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  shopifyOrderId  String
+  orderName       String?
+  email           String?
+  currency        String?
+  // Eligible amount for points: subtotal after discounts, excluding shipping/tax.
+  eligibleAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  refundedAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  cancelledAt     DateTime?
+  paidAt          DateTime?
+  fulfilledAt     DateTime?
+  deliveredAt     DateTime?
+  // Shipping: AWB numbers from Shopify fulfillments, and the carrier status (Shiprocket).
+  trackingNumbers String[]  @default([])
+  shipmentStatus  String?
+  // Returned to origin / lost: points are reversed or never awarded.
+  returnedAt      DateTime?
+  // Value of loyalty (LOY-…) discount codes applied on this order, for analytics.
+  loyaltyDiscount Decimal   @default(0) @db.Decimal(14, 2)
+  discountCodes   String[]  @default([])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  award   PointsAward?
+  refunds OrderRefund[]
+
+  @@unique([storeId, shopifyOrderId])
+  @@index([storeId, email])
+}
+
+// One row per Shopify refund; the unique key makes refund webhooks idempotent.
+model OrderRefund {
+  id              String   @id @default(cuid())
+  orderId         String
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shopifyRefundId String
+  amount          Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt       DateTime @default(now())
+
+  @@unique([orderId, shopifyRefundId])
+}
+
+// ---------------------------------------------------------------------------------------
+// Rules + rewards
+// ---------------------------------------------------------------------------------------
+
+enum EarnRuleType {
+  PURCHASE_PER_CURRENCY // `value` points per 1 unit of store currency spent
+  PURCHASE_FIXED // `value` points per eligible order
+  SIGNUP // `value` points once when a customer joins
+  REFERRAL_FRIEND // `value` bonus points for the new customer on their first qualifying order
+  REFERRAL_REFERRER // `value` points for the referrer when their friend's first order qualifies
+  REVIEW // `value` points per qualifying product review (Judge.me)
+}
+
+model EarnRule {
+  id             String       @id @default(cuid())
+  storeId        String
+  store          Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name           String
+  type           EarnRuleType
+  value          Int
+  minOrderAmount Decimal      @default(0) @db.Decimal(12, 2)
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([storeId, type, active])
+}
+
+enum RewardType {
+  FIXED_AMOUNT // `value` currency off the order
+  PERCENTAGE // `value` percent off the order
+  FREE_SHIPPING
+  // Customer chooses how many points to spend, like Flits: every `pointsCost` points are worth
+  // `value` of store currency, between `minPoints` and `maxPoints` per redemption.
+  CUSTOM_AMOUNT
+}
+
+model Reward {
+  id             String     @id @default(cuid())
+  storeId        String
+  store          Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name           String
+  type           RewardType
+  value          Decimal    @default(0) @db.Decimal(12, 2)
+  pointsCost     Int
+  // CUSTOM_AMOUNT only: smallest/largest spend per redemption (maxPoints null = no cap)
+  minPoints      Int        @default(0)
+  maxPoints      Int?
+  minOrderAmount Decimal    @default(0) @db.Decimal(12, 2)
+  // Days the generated discount code stays valid. 0 = no expiry.
+  codeValidDays  Int        @default(30)
+  active         Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  redemptions Redemption[]
+
+  @@index([storeId, active])
+}
+
+// ---------------------------------------------------------------------------------------
+// Ledger
+// ---------------------------------------------------------------------------------------
+
+enum AwardStatus {
+  PENDING // waiting for holdDays to pass
+  RELEASED // credited to the ledger
+  CANCELLED // order refunded/cancelled before release
+}
+
+// One row per order that earns points. Unique on orderId => an order can only ever be
+// awarded once, no matter how many webhooks or retries arrive.
+model PointsAward {
+  id         String      @id @default(cuid())
+  storeId    String
+  store      Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orderId    String      @unique
+  order      Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  points     Int
+  status     AwardStatus @default(PENDING)
+  releaseAt  DateTime
+  releasedAt DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([status, releaseAt])
+  @@index([storeId, customerId])
+}
+
+enum TransactionType {
+  EARN
+  REDEEM
+  EXPIRE
+  REVERSAL
+  ADJUST
+}
+
+// Append-only. Rows are never updated except `remaining` (lot bookkeeping for FIFO expiry).
+model PointsTransaction {
+  id             String          @id @default(cuid())
+  storeId        String
+  store          Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  type           TransactionType
+  points         Int // signed: credits positive, debits negative
+  balanceAfter   Int
+  // Credit lots only: points from this lot not yet spent/expired/reversed.
+  remaining      Int             @default(0)
+  expiresAt      DateTime?
+  // Where the points came from, for analytics: order | signup | referral | review | manual
+  source         String?
+  // Dedupe key, unique per store. e.g. "award:<id>", "refund:<shopifyRefundId>", "redeem:<requestId>".
+  idempotencyKey String
+  orderId        String?
+  redemptionId   String?
+  note           String?
+  createdAt      DateTime        @default(now())
+
+  @@unique([storeId, idempotencyKey])
+  @@index([customerId, createdAt])
+  @@index([storeId, type, expiresAt])
+}
+
+enum RedemptionStatus {
+  PENDING // points debited, Shopify discount not created yet
+  ACTIVE // code issued
+  USED // code applied to an order
+  FAILED // Shopify call failed, points refunded
+  EXPIRED
+}
+
+model Redemption {
+  id                String           @id @default(cuid())
+  storeId           String
+  store             Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId        String
+  customer          Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  rewardId          String?
+  reward            Reward?          @relation(fields: [rewardId], references: [id], onDelete: SetNull)
+  rewardName        String // snapshot
+  rewardType        RewardType?
+  // Currency value of the discount (null for percentage / free shipping), for analytics.
+  discountAmount    Decimal?         @db.Decimal(12, 2)
+  points            Int
+  status            RedemptionStatus @default(PENDING)
+  code              String?
+  shopifyDiscountId String?
+  expiresAt         DateTime?
+  usedOrderId       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([storeId, code])
+  @@index([storeId, customerId])
+}
+
+// ---------------------------------------------------------------------------------------
+// Customer login by email code (OTP) — for shoppers without a store account session
+// ---------------------------------------------------------------------------------------
+
+model OtpChallenge {
+  id         String    @id @default(cuid())
+  storeId    String
+  store      Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  email      String
+  codeHash   String // HMAC of the 6-digit code; the code itself is never stored
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([storeId, email, createdAt])
+}
+
+// Browser sessions created by a successful OTP. Only a hash of the token is stored.
+model LoyaltySession {
+  id         String   @id @default(cuid())
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------------------
+// Referrals
+// ---------------------------------------------------------------------------------------
+
+enum ReferralStatus {
+  PENDING // code applied, waiting for the friend's first qualifying order
+  REWARDED // both sides paid
+  REVERSED // the qualifying order was cancelled/refunded; rewards taken back
+}
+
+model Referral {
+  id                String         @id @default(cuid())
+  storeId           String
+  store             Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  referrerId        String
+  referrer          Customer       @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  // One referral per friend per store: a code can only be redeemed once by a given customer.
+  refereeId         String         @unique
+  referee           Customer       @relation("Referee", fields: [refereeId], references: [id], onDelete: Cascade)
+  status            ReferralStatus @default(PENDING)
+  qualifyingOrderId String?
+  createdAt         DateTime       @default(now())
+  rewardedAt        DateTime?
+
+  @@index([storeId, referrerId])
+}
+
+// ---------------------------------------------------------------------------------------
+// App integrations (Judge.me reviews, Shiprocket delivery tracking)
+// ---------------------------------------------------------------------------------------
+
+enum IntegrationKind {
+  JUDGEME
+  SHIPROCKET
+}
+
+model Integration {
+  id           String          @id @default(cuid())
+  storeId      String
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind         IntegrationKind
+  enabled      Boolean         @default(false)
+  // Random value the third party must send with its webhook (header or ?token=).
+  webhookToken String
+  // Provider credentials, AES-GCM encrypted (see app/lib/crypto.server.js).
+  secretEnc    String?
+  // Non-secret settings, e.g. { minRating: 4 }
+  config       Json?
+  lastSyncAt   DateTime?
+  lastEventAt  DateTime?
+  lastError    String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([storeId, kind])
+}
+
+// ---------------------------------------------------------------------------------------
+// Merchant-edited email templates. No row = the built-in default for that kind.
+// ---------------------------------------------------------------------------------------
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind      String // points_earned | redeemed | expiring | otp
+  mode      String   @default("blocks") // blocks | html
+  subject   String
+  config    Json? // { theme, blocks } used in blocks mode
+  html      String?  @db.Text // full HTML used in html mode
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, kind])
+}
+
+// ---------------------------------------------------------------------------------------
+// Email log (also the dedupe table for reminders)
+// ---------------------------------------------------------------------------------------
+
+model Notification {
+  id         String    @id @default(cuid())
+  storeId    String
+  store      Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  kind       String // points_earned | redeemed | expiring | test
+  toEmail    String
+  subject    String
+  status     String // SENT | FAILED
+  error      String?
+  dedupeKey  String
+  createdAt  DateTime  @default(now())
+
+  @@unique([storeId, dedupeKey])
+}

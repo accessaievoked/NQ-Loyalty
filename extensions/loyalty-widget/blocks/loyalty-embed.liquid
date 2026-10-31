@@ -1,0 +1,13 @@
+{%- comment -%}
+  App embed: loads the loyalty storefront script. Look, text and behaviour are all
+  controlled from the app's editor — nothing to configure here besides turning it on.
+{%- endcomment -%}
+<script src="/apps/loyalty/widget.js" defer></script>
+
+{% schema %}
+{
+  "name": "Loyalty widget",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
