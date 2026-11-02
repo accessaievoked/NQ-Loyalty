@@ -5,6 +5,7 @@ import { requireStore } from "../services/auth.server";
 import db from "../db.server";
 import { TEMPLATES } from "../lib/widget/defaults";
 import { getWidgetConfig } from "../services/store.server";
+import BackButton from "../components/BackButton";
 
 export const loader = async ({ request }) => {
   const { store, session } = await requireStore(request);
@@ -58,6 +59,7 @@ export default function Appearance() {
 
   return (
     <s-page heading="Storefront appearance">
+      <BackButton href="/app" label="Back to home" />
       <s-button slot="primary-action" variant="primary" href="/app/editor">
         Open editor
       </s-button>
@@ -99,9 +101,26 @@ export default function Appearance() {
           </s-paragraph>
           <s-stack direction="inline" gap="small">
             <s-button href="/app/editor">Open editor</s-button>
-            <s-button href="/app/emails">Edit emails</s-button>
+            <s-button href="/app/emails">Emails</s-button>
             <s-button href="/app/developer">Developer source</s-button>
           </s-stack>
+        </s-stack>
+      </s-section>
+
+      <s-section heading="My Rewards tab on the account page">
+        <s-paragraph>
+          Logged-in customers see a <s-text type="strong">My Rewards</s-text> tab in their account menu. It opens their rewards in a side drawer, with no
+          extra sign-in, and their points account is created automatically the first time. You can change the tab's label and icon in the editor
+          (Launcher tab). If a theme's menu can't be matched, a small button appears instead, or add a menu link to <s-text type="strong">#loyalty</s-text>.
+        </s-paragraph>
+        <s-paragraph>
+          <s-text type="strong">To see it:</s-text> turn on the app embed once (this is needed whichever display mode you use), then open your
+          store's account page while logged in as a customer.
+        </s-paragraph>
+        <s-stack direction="inline">
+          <s-button href={embedUrl} target="_blank" variant="primary">
+            Turn on the app embed
+          </s-button>
         </s-stack>
       </s-section>
 

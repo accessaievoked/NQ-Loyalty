@@ -40,6 +40,21 @@ export const hashToken = (token) => createHash("sha256").update(token).digest("h
 
 export const newToken = (bytes = 32) => randomBytes(bytes).toString("base64url");
 
+/**
+ * A signed reference to a loyalty account ("customerId.signature"). The storefront puts it on the
+ * cart so a guest checkout can credit the account that was open in the widget. Only the server can
+ * produce a valid one, so nobody can attach an order to an account they haven't been given.
+ */
+export const signRef = (storeId, customerId) =>
+  `${customerId}.${createHmac("sha256", pepper()).update(`ref:${storeId}:${customerId}`).digest("base64url").slice(0, 32)}`;
+
+/** Returns the customerId if the reference is genuine for this store, otherwise null. */
+export function verifyRef(storeId, ref) {
+  const [customerId, sig] = String(ref ?? "").split(".");
+  if (!customerId || !sig || customerId.length > 64) return null;
+  return safeEqual(signRef(storeId, customerId), `${customerId}.${sig}`) ? customerId : null;
+}
+
 export function safeEqual(a, b) {
   const x = Buffer.from(String(a ?? ""));
   const y = Buffer.from(String(b ?? ""));

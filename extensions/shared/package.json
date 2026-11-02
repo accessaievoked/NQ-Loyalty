@@ -1,0 +1,7 @@
+{
+  "name": "loyalty-extension-shared",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Code shared by the customer account extensions (bundled into each; not an extension itself)."
+}

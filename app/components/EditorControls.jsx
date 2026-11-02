@@ -49,12 +49,76 @@ export function SelectField({ label, value, options, onChange, help }) {
   );
 }
 
+/** An exact value you can type (the slider is for rough adjustments). Empty = unset. */
+function NumberBox({ value, min, max, unit, placeholder, onChange }) {
+  return (
+    <label className="ed-num">
+      <input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => (e.target.value === "" ? onChange(placeholder ? "" : min) : onChange(Math.min(max, Math.max(min, Math.round(Number(e.target.value))))))}
+      />
+      <span>{unit}</span>
+    </label>
+  );
+}
+
 export function RangeField({ label, value, min, max, unit = "px", onChange }) {
   return (
-    <Row label={`${label} · ${value}${unit}`}>
-      <input type="range" className="ed-range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    <Row label={label}>
+      <div className="ed-slider">
+        <input type="range" className="ed-range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+        <NumberBox value={value} min={min} max={max} unit={unit} onChange={onChange} />
+      </div>
     </Row>
   );
+}
+
+/** A colour that can be left unset (= inherit the theme), with a clear button. */
+export function OptionalColorField({ label, value, onChange }) {
+  return (
+    <Row label={label}>
+      <div className="ed-color">
+        <input type="color" value={/^#[0-9a-f]{6}$/i.test(value || "") ? value : "#888888"} onChange={(e) => onChange(e.target.value)} />
+        <input className="ed-input" value={value || ""} placeholder="Theme default" onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+        {value ? (
+          <button type="button" className="ed-icon-btn sm" title="Use the theme default" onClick={() => onChange("")}>
+            ×
+          </button>
+        ) : null}
+      </div>
+    </Row>
+  );
+}
+
+/** A slider that can be left unset (= inherit the theme). */
+export function OptionalRangeField({ label, value, min, max, onChange }) {
+  const set = value !== undefined && value !== "" && value !== null;
+  return (
+    <Row label={label}>
+      <div className="ed-slider">
+        <input type="range" className="ed-range" min={min} max={max} value={set ? value : Math.round((min + max) / 2)} onChange={(e) => onChange(Number(e.target.value))} />
+        <NumberBox value={set ? value : ""} placeholder="auto" min={min} max={max} unit="px" onChange={onChange} />
+        {set ? (
+          <button type="button" className="ed-icon-btn sm" title="Use the theme default" onClick={() => onChange("")}>
+            ×
+          </button>
+        ) : null}
+      </div>
+    </Row>
+  );
+}
+
+/** One field from BLOCK_STYLE_FIELDS. */
+export function StyleField({ def, value, onChange }) {
+  if (def.type === "color") return <OptionalColorField label={def.label} value={value} onChange={onChange} />;
+  if (def.type === "range") return <OptionalRangeField label={def.label} value={value} min={def.min} max={def.max} onChange={onChange} />;
+  if (def.type === "toggle") return <Toggle label={def.label} checked={!!value} onChange={(v) => onChange(v ? true : "")} help={def.help} />;
+  return <SelectField label={def.label} value={value ?? ""} options={def.options} onChange={onChange} />;
 }
 
 /** Renders one setting from a block definition: { key, label, type, options?, min?, max?, help? } */

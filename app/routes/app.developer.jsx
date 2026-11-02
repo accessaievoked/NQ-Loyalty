@@ -15,6 +15,7 @@ import db from "../db.server";
 import WidgetPreview from "../components/WidgetPreview";
 import { formatMoney } from "../lib/widget/render";
 import WidgetReference from "../components/WidgetReference";
+import { ArrowLeft } from "../components/BackButton";
 import "../styles/editor.css";
 
 export const loader = async ({ request }) => {
@@ -196,8 +197,8 @@ export default function Developer() {
     <div className="ed">
       <header className="ed-top">
         <div className="ed-top-left">
-          <Link to="/app/appearance" className="ed-back" aria-label="Back">
-            ←
+          <Link to="/app" replace className="ed-back" aria-label="Back to home">
+            <ArrowLeft />
           </Link>
           <div>
             <div className="ed-title">Developer source</div>

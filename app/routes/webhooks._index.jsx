@@ -2,9 +2,11 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { deleteStore, getStoreByShop } from "../services/store.server";
 import { upsertCustomer, shapeCustomer } from "../services/customers.server";
+import { handleReturnWebhook } from "../services/returns.server";
 import {
   claimAndEvaluate,
   handleFulfillmentEvent,
+  handleFulfillmentUpdate,
   handleOrderEvent,
   handleRefund,
 } from "../services/orders.server";
@@ -12,7 +14,7 @@ import {
 // One endpoint for every non-app webhook topic. Shopify retries on non-2xx, and every handler
 // below is idempotent, so a failure here is safe to bubble up as a 500 and be retried.
 export const action = async ({ request }) => {
-  const { shop, topic, payload } = await authenticate.webhook(request);
+  const { shop, topic, payload, admin } = await authenticate.webhook(request);
 
   if (topic === "SHOP_REDACT") {
     await deleteStore(shop); // cascades through every table
@@ -37,6 +39,18 @@ export const action = async ({ request }) => {
       break;
     case "FULFILLMENT_EVENTS_CREATE":
       await handleFulfillmentEvent(store, payload);
+      break;
+    case "FULFILLMENTS_CREATE":
+    case "FULFILLMENTS_UPDATE":
+      await handleFulfillmentUpdate(store, payload);
+      break;
+    case "RETURNS_REQUEST":
+    case "RETURNS_APPROVE":
+    case "RETURNS_DECLINE":
+    case "RETURNS_CANCEL":
+    case "RETURNS_CLOSE":
+    case "RETURNS_REOPEN":
+      console.log(`[returns] ${topic}:`, await handleReturnWebhook(store, topic, payload, admin));
       break;
 
     case "CUSTOMERS_CREATE":

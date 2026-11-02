@@ -1,0 +1,21 @@
+{%- comment -%}
+  Optional: a "My Rewards" link you can place anywhere (for example in a custom account menu).
+  It opens the rewards drawer. The storefront script also adds a tab to the account menu on its
+  own; use this block only if you want the link somewhere specific.
+{%- endcomment -%}
+<a href="#loyalty" data-loyalty-open class="loyalty-account-link" style="display:inline-flex;align-items:center;gap:.5em;padding:.6em 1em;text-decoration:none;color:inherit;">
+  <span aria-hidden="true">{{ block.settings.icon }}</span>
+  <span>{{ block.settings.label }}</span>
+</a>
+<script src="/apps/loyalty/widget.js" defer></script>
+
+{% schema %}
+{
+  "name": "My Rewards link",
+  "target": "section",
+  "settings": [
+    { "type": "text", "id": "label", "label": "Label", "default": "My Rewards" },
+    { "type": "text", "id": "icon", "label": "Icon (emoji)", "default": "🎁" }
+  ]
+}
+{% endschema %}

@@ -1,4 +1,4 @@
-// Checks for OTP login, referrals, Judge.me, Shiprocket, analytics and encryption against the
+// Checks for OTP login, referrals, Judge.me, delivery/returns, analytics and encryption against the
 // real database, using a throwaway store (emails disabled, so nothing is sent).
 // Run: node scripts/smoke-test-features.mjs
 import "dotenv/config";
@@ -9,9 +9,7 @@ import { IdentityError, requestOtp, verifyOtp, sessionCustomer, revokeSession, f
 import { upsertCustomer } from "../app/services/customers.server.js";
 import { handleOrderEvent, handleRefund } from "../app/services/orders.server.js";
 import { ReferralError, applyReferralCode, ensureReferralCode, referralInfo } from "../app/services/referrals.server.js";
-import {
-  authenticateIntegrationWebhook, classifyShipment, ensureIntegration, handleShiprocketWebhook, processReview,
-} from "../app/services/integrations.server.js";
+import { ensureIntegration, processReview } from "../app/services/integrations.server.js";
 import { loadAnalytics } from "../app/services/analytics.server.js";
 import { postTransaction } from "../app/services/ledger.server.js";
 import { deleteStore } from "../app/services/store.server.js";
@@ -166,65 +164,125 @@ try {
   assert.match(await processReview(store, review(6, { curated: "spam", product_external_id: "p9" })), /spam/);
   ok("reviews: rating threshold, once per product, strangers and spam ignored");
 
-  // ---- Shiprocket
-  assert.equal(classifyShipment("Delivered"), "delivered");
-  assert.equal(classifyShipment("RTO Delivered"), "returned");
-  assert.equal(classifyShipment("RTO Initiated"), "returned");
-  assert.equal(classifyShipment("In Transit"), "shipped");
-  assert.equal(classifyShipment("Out For Delivery"), "shipped");
-  assert.equal(classifyShipment("Lost"), "returned");
-  ok("Shiprocket statuses classified (RTO Delivered counts as a return, not a delivery)");
-
-  const sr = await ensureIntegration(store.id, "SHIPROCKET");
-  await prisma.integration.update({ where: { id: sr.id }, data: { enabled: true } });
-  const req = (url, headers = {}) => new Request(url, { method: "POST", headers });
-  const base = `https://x.test/integrations/shiprocket/${store.id}`;
-  assert.ok((await authenticateIntegrationWebhook(req(`${base}?token=${sr.webhookToken}`), "SHIPROCKET", store.id)).integration);
-  assert.ok((await authenticateIntegrationWebhook(req(base, { "x-api-key": sr.webhookToken }), "SHIPROCKET", store.id)).integration);
-  assert.equal((await authenticateIntegrationWebhook(req(`${base}?token=wrong`), "SHIPROCKET", store.id)).status, 401);
-  assert.equal((await authenticateIntegrationWebhook(req(base), "SHIPROCKET", store.id)).status, 401);
-  assert.equal((await authenticateIntegrationWebhook(req(`${base}?token=${sr.webhookToken}`), "SHIPROCKET", "other-store")).status, 401);
-  ok("Shiprocket webhook accepts the token (query or header) and rejects everything else");
-
+  // ---- delivery + returns straight from Shopify (no carrier integration needed)
+  const OS = await import("../app/services/orders.server.js");
+  const RT = await import("../app/services/returns.server.js");
   await prisma.storeSettings.update({ where: { storeId: store.id }, data: { earnTrigger: "DELIVERED", holdDays: 0 } });
   await reload();
   const erin = await upsertCustomer(store.id, { shopifyCustomerId: "5", email: "erin@example.invalid", emailVerified: true });
   const e0 = await bal(erin.id);
   const paid = order(4001, "5", 40);
   await handleOrderEvent(store, "orders/paid", paid);
-  await handleOrderEvent(store, "orders/fulfilled", { ...paid, updated_at: new Date().toISOString(), fulfillments: [{ tracking_number: "AWB123" }] });
-  const o = await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "4001" } });
-  assert.deepEqual(o.trackingNumbers, ["AWB123"]);
-  assert.equal(await bal(erin.id), e0); // not delivered yet
-  assert.match(await handleShiprocketWebhook(sr, { awb: "AWB123", current_status: "In Transit" }), /status saved/);
+  await handleOrderEvent(store, "orders/fulfilled", { ...paid, updated_at: new Date().toISOString() });
+  assert.equal(await bal(erin.id), e0);                                                    // fulfilled isn't delivered
+  await OS.handleFulfillmentUpdate(store, { order_id: 4001, shipment_status: "in_transit", updated_at: "2026-10-01T10:00:00Z" });
   assert.equal(await bal(erin.id), e0);
-  assert.match(await handleShiprocketWebhook(sr, { awb: "AWB123", current_status: "Delivered", current_timestamp: "2026-10-01 10:00:00" }), /delivered/);
-  assert.equal(await bal(erin.id), e0 + 40);
-  await handleShiprocketWebhook(sr, { awb: "AWB123", current_status: "Delivered" }); // duplicate ping
-  assert.equal(await bal(erin.id), e0 + 40);
-  const delivered = await prisma.order.findUnique({ where: { id: o.id } });
-  assert.equal(delivered.deliveredAt.toISOString().slice(0, 10), "2026-10-01"); // first delivery time kept
-  ok("DELIVERED trigger + Shiprocket: no points until delivered, matched by AWB, duplicate pings are harmless");
+  assert.equal((await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "4001" } })).shipmentStatus, "in_transit");
+  await OS.handleFulfillmentUpdate(store, { order_id: 4001, shipment_status: "delivered", updated_at: "2026-10-02T10:00:00Z" });
+  assert.equal(await bal(erin.id), e0 + 40);                                               // delivered → credited
+  await OS.handleFulfillmentUpdate(store, { order_id: 4001, shipment_status: "delivered", updated_at: "2026-10-09T10:00:00Z" });
+  await OS.handleFulfillmentEvent(store, { order_id: 4001, status: "delivered", happened_at: "2026-10-10T10:00:00Z" });
+  assert.equal(await bal(erin.id), e0 + 40);                                               // repeats never double-credit
+  assert.equal((await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "4001" } })).deliveredAt.toISOString().slice(0, 10), "2026-10-02"); // first delivery time kept
+  ok("delivery from Shopify: fulfillments/update 'delivered' credits once; transit/repeat pings change nothing");
 
-  assert.match(await handleShiprocketWebhook(sr, { awb: "AWB123", current_status: "RTO Delivered" }), /returned/);
-  assert.equal(await bal(erin.id), e0);
-  assert.match(await handleShiprocketWebhook(sr, { order_id: "9999999", current_status: "Delivered" }), /no matching order/);
-  ok("a returned parcel (RTO) takes the points back; unknown orders are ignored safely");
-
-  // hold window after delivery: points wait N days
+  // return window after delivery, then a return in progress HOLDS the points
   await prisma.storeSettings.update({ where: { storeId: store.id }, data: { holdDays: 7 } });
   await reload();
   const fay = await upsertCustomer(store.id, { shopifyCustomerId: "6", email: "fay@example.invalid", emailVerified: true });
+  const f0 = await bal(fay.id);
+  const due = async (orderId) => {
+    const o = await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: String(orderId) } });
+    const a = await prisma.pointsAward.findUnique({ where: { orderId: o.id } });
+    await prisma.pointsAward.update({ where: { id: a.id }, data: { releaseAt: new Date(Date.now() - 1000) } });
+    return a.id;
+  };
   const p2 = order(4002, "6", 40);
   await handleOrderEvent(store, "orders/paid", p2);
-  await handleOrderEvent(store, "orders/fulfilled", { ...p2, updated_at: new Date().toISOString(), fulfillments: [{ tracking_number: "AWB777" }] });
-  await handleShiprocketWebhook(sr, { order_id: "4002", current_status: "Delivered" }); // matched by order number
-  const award = await prisma.pointsAward.findFirst({ where: { customerId: fay.id } });
-  assert.equal(award.status, "PENDING");
-  assert.ok(award.releaseAt.getTime() > Date.now() + 6 * 86400000);
-  assert.equal(await bal(fay.id), 25); // welcome bonus only
-  ok("return window: points stay pending for 7 days after Shiprocket reports delivery");
+  await OS.handleFulfillmentUpdate(store, { order_id: 4002, shipment_status: "delivered", updated_at: new Date().toISOString() });
+  const award2 = await prisma.pointsAward.findFirst({ where: { customerId: fay.id } });
+  assert.equal(award2.status, "PENDING");
+  assert.ok(award2.releaseAt.getTime() > Date.now() + 6 * 86400000);
+  assert.equal(await bal(fay.id), f0);
+  ok("return window: points stay pending for 7 days after Shopify reports delivery");
 
+  assert.match(await RT.handleReturnWebhook(store, "RETURNS_REQUEST", { order_id: 4002 }, null), /held/);
+  const id2 = await due(4002);
+  assert.equal(await OS.releaseAward(id2), null);                                          // the window passed, but a return is open
+  assert.equal(await OS.releaseDueAwards() >= 0, true);
+  assert.equal((await prisma.pointsAward.findUnique({ where: { id: id2 } })).status, "PENDING");
+  assert.equal(await bal(fay.id), f0);
+  await RT.handleReturnWebhook(store, "RETURNS_APPROVE", { order_id: 4002 }, null);
+  assert.equal(await OS.releaseAward(id2), null);                                          // still in progress after approval
+  assert.match(await RT.handleReturnWebhook(store, "RETURNS_DECLINE", { order_id: 4002 }, null), /resume/);
+  assert.equal(await bal(fay.id), f0 + 40);                                                // declined → credited straight away
+  ok("a return in progress holds waiting points; if it's declined they're credited");
+
+  // a completed return cancels waiting points for good
+  const gus = await upsertCustomer(store.id, { shopifyCustomerId: "7", email: "gus@example.invalid", emailVerified: true });
+  const g0 = await bal(gus.id);
+  await handleOrderEvent(store, "orders/paid", order(4003, "7", 60));
+  await OS.handleFulfillmentUpdate(store, { order_id: 4003, shipment_status: "delivered", updated_at: new Date().toISOString() });
+  await RT.handleReturnWebhook(store, "RETURNS_REQUEST", { order_id: 4003 }, null);
+  assert.match(await RT.handleReturnWebhook(store, "RETURNS_CLOSE", { order_id: 4003 }, null), /cancelled/);
+  const id3 = await due(4003);
+  assert.equal(await OS.releaseAward(id3), null);
+  assert.equal((await prisma.pointsAward.findUnique({ where: { id: id3 } })).status, "CANCELLED");
+  assert.equal(await bal(gus.id), g0);                                                     // never credited
+  await OS.releaseDueAwards();
+  assert.equal(await bal(gus.id), g0);
+  ok("a completed return cancels the waiting points entirely; they're never credited, even later");
+
+  // …and takes points back if they were already credited
+  const hal = await upsertCustomer(store.id, { shopifyCustomerId: "8", email: "hal@example.invalid", emailVerified: true });
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { holdDays: 0 } });
+  await reload();
+  const h0 = await bal(hal.id);
+  await handleOrderEvent(store, "orders/paid", order(4004, "8", 50));
+  await OS.handleFulfillmentUpdate(store, { order_id: 4004, shipment_status: "delivered", updated_at: new Date().toISOString() });
+  assert.equal(await bal(hal.id), h0 + 50);
+  await RT.handleReturnWebhook(store, "RETURNS_CLOSE", { order_id: 4004 }, null);
+  assert.equal(await bal(hal.id), h0);
+  await RT.handleReturnWebhook(store, "RETURNS_CLOSE", { order_id: 4004 }, null);          // replayed webhook
+  assert.equal(await bal(hal.id), h0);
+  ok("a completed return after crediting takes the points back once (replay-safe)");
+
+  // payload without an order id → looked up from Shopify by the return's id
+  const lookup = { graphql: async () => ({ json: async () => ({ data: { return: { id: "gid://shopify/Return/9", status: "OPEN", order: { id: "gid://shopify/Order/4005" } } } }) }) };
+  await handleOrderEvent(store, "orders/paid", order(4005, "8", 10));
+  assert.match(await RT.handleReturnWebhook(store, "RETURNS_REQUEST", { admin_graphql_api_id: "gid://shopify/Return/9" }, lookup), /held/);
+  assert.equal((await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "4005" } })).returnStatus, "REQUESTED");
+  assert.match(await RT.handleReturnWebhook(store, "RETURNS_REQUEST", { nothing: true }, null), /order unknown/);
+  ok("return webhooks: order id taken from the payload or looked up from Shopify; unknown orders are ignored safely");
+
+  // ---- which account gets the points at checkout
+  const { signRef, verifyRef } = await import("../app/lib/crypto.server.js");
+  const open = await upsertCustomer(store.id, { shopifyCustomerId: "21", email: "open@example.invalid", emailVerified: true });   // account open in the widget
+  const buyer = await upsertCustomer(store.id, { shopifyCustomerId: "22", email: "buyer@example.invalid", emailVerified: true }); // shopper's own account
+  const withRef = (id, customer, ref) => ({ ...order(id, customer.shopifyCustomerId, 100), customer: { id: customer.shopifyCustomerId, state: customer.state, email: customer.email, first_name: "T" }, note_attributes: ref ? [{ name: "loyalty_ref", value: ref }] : [] });
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { earnTrigger: "PAID", holdDays: 0 } });
+  await reload();
+  const ref = signRef(store.id, open.id);
+  assert.equal(verifyRef(store.id, ref), open.id);
+  assert.equal(verifyRef(store.id, `${open.id}.forged`), null);
+  assert.equal(verifyRef("another-store", ref), null);
+  const o0 = await bal(open.id), b0 = await bal(buyer.id);
+  // 1) signed in with their own account → THEIR account, even though another was open in the widget
+  await handleOrderEvent(store, "orders/paid", withRef(5001, { shopifyCustomerId: "22", state: "enabled", email: "buyer@example.invalid" }, ref));
+  assert.equal(await bal(buyer.id), b0 + 100);
+  assert.equal(await bal(open.id), o0);
+  // 2) guest checkout (Shopify makes a "disabled" customer record) → the account open in the widget
+  await handleOrderEvent(store, "orders/paid", withRef(5002, { shopifyCustomerId: "23", state: "disabled", email: "guest@example.invalid" }, ref));
+  assert.equal(await bal(open.id), o0 + 100);
+  assert.equal(await prisma.customer.count({ where: { storeId: store.id, email: "guest@example.invalid" } }), 0); // no stray guest account either
+  // 3) a forged or foreign reference is ignored → falls back to Shopify's own record
+  await handleOrderEvent(store, "orders/paid", withRef(5003, { shopifyCustomerId: "24", state: "disabled", email: "g2@example.invalid" }, `${open.id}.forged`));
+  assert.equal(await bal(open.id), o0 + 100);
+  assert.equal(await bal((await prisma.customer.findFirst({ where: { storeId: store.id, shopifyCustomerId: "24" } })).id), 125); // 100 + the welcome bonus
+  // 4) no reference at all → Shopify's record, as before
+  await handleOrderEvent(store, "orders/paid", withRef(5004, { shopifyCustomerId: "25", state: "disabled", email: "g3@example.invalid" }, null));
+  assert.equal(await bal((await prisma.customer.findFirst({ where: { storeId: store.id, shopifyCustomerId: "25" } })).id), 125);
+  ok("checkout: signed-in shoppers earn on their own account; guests earn on the account open in the widget; forged refs are ignored");
   // ---- custom HTML layout: every block must be reachable (regression: coupons were missing)
   const { normalizeConfig, missingTemplateBlocks, STARTER_HTML } = await import("../app/lib/widget/defaults.js");
   const oldStarter = STARTER_HTML.replace("{{block:earn}}\n", "").replace("{{block:coupons}}\n", "");
@@ -246,7 +304,7 @@ try {
     { label: "Reward redeemed · old", points: -100, date: "2026-09-02", redeem: { code: "LOY-OLD999", status: "USED", expiresAt: null } },
   ] };
   const htmlOut = renderBlocks(cfg, view);
-  assert.ok(htmlOut.includes("LOY-ABC123") && htmlOut.includes('data-action="apply"'));   // active code: usable
+  assert.ok(htmlOut.includes("LOY-ABC123") && htmlOut.includes('data-action="copy"') && !htmlOut.includes('data-action="apply"'));   // active code: copyable (no apply button)
   assert.ok(htmlOut.includes("LOY-OLD999") && htmlOut.includes(">Used<"));               // used code: visible, badged
   assert.equal((htmlOut.match(/<details>/g) || []).length, 2);                          // only redeem rows open
   assert.ok(htmlOut.includes("max-height:200px") && htmlOut.includes("lw-scroll"));
@@ -369,46 +427,125 @@ try {
   assert.equal((await RS.totalReferralRevenue(store.id)).revenue, 50);
   ok("referrals: customer page data lists friends, their orders and revenue (cancelled excluded, refunds subtracted)");
 
-  // ---- reporting currency
+  // ---- reporting currency: always INR, no selector; the store's own currency is untouched
   const C = await import("../app/services/currency.server.js");
-  const fresh = async () => (await prisma.store.findUnique({ where: { id: store.id }, include: { settings: true } }));
-  let fx = await C.getFx(await fresh());
-  assert.deepEqual([fx.rate, fx.converted, fx.to], [1, false, "USD"]);
-  await C.setDisplayCurrency(await fresh(), "INR");
-  await C.setManualRate(await fresh(), 80);
-  fx = await C.getFx(await fresh());
-  assert.deepEqual([fx.rate, fx.converted, fx.to, fx.manual], [80, true, "INR", true]);
+  const fresh = async () => await prisma.store.findUnique({ where: { id: store.id }, include: { settings: true } });
+  const realFetch = globalThis.fetch;
+  const rateService = (inr) => async () => ({ ok: true, json: async () => ({ result: "success", rates: { INR: inr } }) });
+  assert.equal(C.REPORT_CURRENCY(), "INR");
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { fxRate: null, fxPair: null, fxRateAt: null } });
+  globalThis.fetch = rateService(80);
+  let fx = await C.getFx(await fresh());                                                   // the test store sells in USD
+  assert.deepEqual([fx.rate, fx.converted, fx.from, fx.to], [80, true, "USD", "INR"]);
   const inUsd = await loadAnalytics(await fresh(), 30);
   const inInr = await loadAnalytics(await fresh(), 30, fx);
   assert.equal(inInr.currency, "INR");
   assert.equal(Math.round(inInr.orders.revenue), Math.round(inUsd.orders.revenue * 80));
   assert.equal(Math.round(inInr.referralRevenue.revenue), 50 * 80);
-  assert.equal(inInr.orders.count, inUsd.orders.count);                                  // counts and points never convert
+  assert.equal(inInr.orders.count, inUsd.orders.count);                                      // counts and points never convert
   assert.equal(inInr.points.issued, inUsd.points.issued);
-  await assert.rejects(C.setManualRate(await fresh(), -5), /above 0/);
-  await C.setDisplayCurrency(await fresh(), "XXX");                                       // unsupported → back to store currency
-  assert.equal((await C.getFx(await fresh())).converted, false);
-  ok("reporting currency: money converts by the rate, counts/points don't, bad input and unsupported currencies are refused");
+  ok("reporting currency: a USD store is shown in INR by default; money converts, counts and points don't");
 
-  const realFetch = globalThis.fetch;
-  await C.setDisplayCurrency(await fresh(), "EUR");
+  globalThis.fetch = async () => { throw new Error("must not be called: the rate is fresh"); };
+  assert.equal((await C.getFx(await fresh())).rate, 80);                                    // a fresh rate isn't refetched
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { fxRateAt: new Date(Date.now() - 3 * 86400000) } });
+  const stale = await C.getFx(await fresh());                                               // rate service down → last saved rate, flagged
+  assert.deepEqual([stale.rate, stale.stale, stale.converted], [80, true, true]);
+  globalThis.fetch = rateService(95);
+  assert.equal((await C.getFx(await fresh())).rate, 95);                                    // old rate refreshes automatically
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { fxRate: null, fxPair: null, fxRateAt: null } });
   globalThis.fetch = async () => { throw new Error("offline"); };
-  let noRate = await C.getFx(await fresh());
-  assert.equal(noRate.converted, false);                                                  // no rate and no service → stays in store currency
-  assert.match(noRate.error, /Couldn't get an exchange rate/);
-  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { fxRate: 0.9, fxPair: "USD>EUR", fxRateAt: new Date(Date.now() - 3 * 86400000), fxManual: false } });
-  const stale = await C.getFx(await fresh());
-  assert.deepEqual([stale.rate, stale.stale, stale.converted], [0.9, true, true]);      // service down → last saved rate, flagged
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ result: "success", rates: { EUR: 0.95 } }) });
-  const live = await C.getFx(await fresh());
-  assert.deepEqual([live.rate, live.stale], [0.95, false]);                               // old rate refreshes automatically
-  assert.equal(Number((await fresh()).settings.fxRate), 0.95);
-  globalThis.fetch = async () => { throw new Error("must not be called: rate is fresh"); };
-  assert.equal((await C.getFx(await fresh())).rate, 0.95);                                // a fresh rate isn't refetched
+  const none = await C.getFx(await fresh());                                                // no rate and no service → stays in store currency
+  assert.equal(none.converted, false);
+  assert.match(none.error, /Couldn't get an exchange rate/);
   globalThis.fetch = realFetch;
-  await C.setDisplayCurrency(await fresh(), null);
-  ok("reporting currency: stale rate used if the service is down, refreshed when old, not refetched when fresh");
+  const inrStore = { id: store.id, currency: "INR", settings: (await fresh()).settings };
+  assert.deepEqual([(await C.getFx(inrStore)).rate, (await C.getFx(inrStore)).converted], [1, false]);   // an INR store: nothing to convert
+  ok("reporting currency: fresh rate not refetched, stale rate used if the service is down, INR stores untouched");
+  // ---- per-block styling in the widget
+  const WD = await import("../app/lib/widget/defaults.js");
+  const WR = await import("../app/lib/widget/render.js");
+  const dirty = WD.normalizeStyle({ bg: "red; background:url(//evil)", text: "#112233", accent: "#ff0000", radius: 999, pad: -5, fontSize: "18", weight: "900", align: "justify", hideOn: "tablet", bogus: "x" });
+  assert.deepEqual(dirty, { text: "#112233", accent: "#ff0000", radius: 40, pad: 0, fontSize: 18 });   // bad colours/values dropped, numbers clamped
+  const styled = WD.normalizeConfig({ blocks: [
+    { type: "balance", style: { accent: "#e11d48", cardBg: "#fff1f2", radius: 6, pad: 8, hideOn: "mobile", align: "left" } },
+    { type: "header", style: { bg: "#111827", text: "#ffffff" } },
+  ] });
+  assert.deepEqual(styled.blocks[0].style.accent, "#e11d48");
+  const styledHtml = WR.renderBlocks(styled, { loggedIn: true, customer: { points: 5 } });
+  assert.ok(styledHtml.includes("--p:#e11d48") && styledHtml.includes("--sf:#fff1f2") && styledHtml.includes("--r:6px") && styledHtml.includes("lw-hide-mobile"));
+  assert.ok(styledHtml.includes("--hbg:#111827") && styledHtml.includes("--hfg:#ffffff"));            // header colours use their own variables
+  assert.ok(!styledHtml.includes("evil"));
+  assert.ok(WR.widgetCss(WD.normalizeConfig({})).includes("var(--hbg,"));
+  ok("widget blocks: each block's colours, radius, spacing and visibility are applied; unsafe values never reach the page");
 
+  // ---- the My Rewards side drawer
+  const cfg0 = WD.normalizeConfig({});
+  assert.deepEqual([cfg0.account.tab, cfg0.account.label, cfg0.account.drawerWidth], [true, "My Rewards", 420]);
+  assert.equal(WD.normalizeConfig({ account: { drawerWidth: 9999, label: "" } }).account.drawerWidth, 560);
+  assert.ok(WR.DEFAULT_DRAWER_SHELL.includes("{{content}}") && WR.DEFAULT_DRAWER_SHELL.includes('data-action="toggle"'));
+  assert.ok(WR.drawerCss({ account: { drawerWidth: 480 } }).includes("min(480px"));
+  assert.ok(WR.widgetCss(cfg0).includes(".lw-is-drawer"));
+  const codes = WR.renderBlocks(WD.normalizeConfig({ blocks: [{ type: "coupons" }] }), { loggedIn: true, coupons: [{ code: "LOY-1", rewardName: "R", status: "ACTIVE", expiresAt: "2026-12-01" }] });
+  assert.ok(codes.includes('data-action="copy"') && !codes.includes('data-action="apply"') && !/checkout/i.test(codes));   // codes are copy-only
+  ok("account drawer: default settings, shell, CSS; discount codes are copy-only");
+
+  // ---- email designs and per-block styling
+  for (const kind of Object.keys(E.EMAIL_KINDS)) {
+    for (const id of Object.keys(E.EMAIL_PRESETS)) {
+      const tpl = E.buildPreset(kind, id);
+      const out = E.renderEmail(kind, tpl, E.EMAIL_KINDS[kind].sample);
+      assert.ok(out.html.includes("<table") && !out.html.includes("{{") && out.subject.length > 0, `${kind}/${id}`);
+      assert.deepEqual(E.missingRequired(kind, tpl, E.EMAIL_KINDS[kind].sample), []);             // the login code survives every design
+    }
+  }
+  assert.ok(E.renderEmail("points_earned", E.defaultEmailTemplate("points_earned"), E.EMAIL_KINDS.points_earned.sample).html.includes("#f0708a")); // Claura-style blush is the default
+  assert.deepEqual(E.normalizeEmailStyle({ bg: "red;x", box: "#abc", size: 999, padTop: "12", weight: "900", italic: "yes", upper: true }), { box: "#abc", size: 48, padTop: 12, upper: true });
+  const styledMail = E.renderEmail("redeemed", {
+    blocks: [
+      { type: "heading", settings: { text: "Hi" }, style: { bg: "#ffeeaa", padTop: 40, size: 31, color: "#112233", weight: "800", lineHeight: "2", align: "center", italic: true } },
+      { type: "text", settings: { text: "Visit [our shop]({{shop_url}}) or [bad](javascript:alert(1)). **Bold**" }, style: { box: "#eeeeee", radius: 12, boxPad: 20 } },
+      { type: "image", settings: { url: "https://cdn.example.com/a.png", link: "{{shop_url}}", width: 300 }, style: { radius: 16 } },
+      { type: "image", settings: { url: "http://insecure.example.com/a.png" } },
+      { type: "button", settings: { label: "Go", url: "{{shop_url}}", fullWidth: true }, style: { box: "#0000ff", radius: 999, color: "#ffffff" } },
+      { type: "links", settings: { items: "Shop | {{shop_url}}\nHelp | mailto:help@example.com\nNowhere | javascript:alert(1)" } },
+    ],
+  }, E.EMAIL_KINDS.redeemed.sample);
+  const h = styledMail.html;
+  assert.ok(h.includes("background:#ffeeaa") && h.includes("padding:40px") && h.includes("font-size:31px") && h.includes("color:#112233") && h.includes("font-weight:800") && h.includes("line-height:2") && h.includes("text-align:center") && h.includes("font-style:italic"));
+  assert.ok(h.includes('href="https://example.myshopify.com"') && h.includes(">our shop</a>") && !/href="javascript/i.test(h) && h.includes("<strong>Bold</strong>"));
+  assert.ok(h.includes("background:#eeeeee") && h.includes("border-radius:12px") && h.includes("padding:20px"));
+  assert.ok(h.includes('src="https://cdn.example.com/a.png"') && h.includes("border-radius:16px") && !h.includes("insecure.example.com"));   // https images only
+  assert.ok(h.includes("background:#0000ff") && h.includes("border-radius:60px") && h.includes("display:block;text-align:center"));
+  assert.ok(h.includes('href="mailto:help@example.com"') && h.includes(">Nowhere<") && !/href="javascript/i.test(h));
+  ok("emails: six designs render for all four emails (login code intact); per-block colour, spacing, text, boxes, links and images work and stay safe");
+  // ---- points-about-to-expire reminders
+  const RM = await import("../app/services/reminders.server.js");
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { expiryDays: 30, expiryReminderDays: 7 } });
+  const ivy = await upsertCustomer(store.id, { shopifyCustomerId: "31", email: "ivy@example.invalid", emailVerified: true });
+  const jon = await upsertCustomer(store.id, { shopifyCustomerId: "32", email: "jon@example.invalid", emailVerified: true });
+  const inDays = (d) => new Date(Date.now() + d * 86400000);
+  const lot = (c, pts, d, key) => postTransaction({ storeId: store.id, customerId: c.id, type: "ADJUST", points: pts, source: "manual", idempotencyKey: key, expiresAt: inDays(d) });
+  await lot(ivy, 100, 3, "rm-a");     // expires in 3 days  → warn
+  await lot(ivy, 50, 5, "rm-b");      // also within the window → summed into one reminder
+  await lot(ivy, 200, 20, "rm-c");    // too far away → not yet
+  await lot(jon, 70, 40, "rm-d");     // nowhere near
+  const spent = await lot(jon, 30, 2, "rm-e");
+  await prisma.pointsTransaction.update({ where: { id: spent.transaction.id }, data: { remaining: 0 } }); // already spent → nothing left to expire
+  const batches = await RM.expiringBatches(store.id, 7);
+  const mine = batches.filter((b) => [ivy.id, jon.id].includes(b.customerId));
+  assert.equal(mine.length, 1);                                                             // only Ivy
+  assert.deepEqual([mine[0].customerId, mine[0].points], [ivy.id, 150]);                   // 100 + 50, one entry
+  assert.equal(mine[0].date, inDays(3).toISOString().slice(0, 10));                        // dated by the earliest batch
+  const wider = (await RM.expiringBatches(store.id, 30)).find((b) => b.customerId === ivy.id);
+  assert.equal(wider.points, 375);                                                          // a longer window adds the 20-day lot (200) and her 30-day welcome bonus (25)
+  assert.equal(wider.firstLotId, mine[0].firstLotId);                                       // same key → the same email isn't sent twice
+  await postTransaction({ storeId: store.id, customerId: ivy.id, type: "ADJUST", points: 1, idempotencyKey: "rm-f", source: "manual", expiresAt: inDays(-1) });
+  assert.ok(!(await RM.expiringBatches(store.id, 7)).some((b) => b.points === 1));          // already-expired points belong to the expiry job
+  const sentBefore = await prisma.notification.count({ where: { storeId: store.id } });
+  await RM.sendExpiryReminders();                                                            // this store has emails switched off
+  assert.equal(await prisma.notification.count({ where: { storeId: store.id } }), sentBefore);
+  ok("expiry reminders: customers with points expiring in the warning window are found once, summed, and dated by their earliest batch");
   // ---- a new store gets starter rewards in ITS currency
   const shop2 = `cur-${Date.now()}.myshopify.com`;
   const { ensureStore } = await import("../app/services/store.server.js");
@@ -426,6 +563,85 @@ try {
     await deleteStore(shop2);
   }
   ok("new INR store: starter reward is named and sized in rupees, not dollars");
+
+  // ---- new customer accounts: Shopify's session token identifies the shop and customer
+  const { verifySessionToken, TokenError } = await import("../app/services/customeraccount.server.js");
+  const { createHmac } = await import("node:crypto");
+  const creds = { secret: "test-secret", apiKey: "test-key" };
+  const sign = (payload, secret = creds.secret, alg = "HS256") => {
+    const p = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const body = `${p({ alg, typ: "JWT" })}.${p(payload)}`;
+    return `${body}.${createHmac("sha256", secret).update(body).digest("base64url")}`;
+  };
+  const nowSec = Math.floor(Date.now() / 1000);
+  const claims = { dest: "https://tok-shop.myshopify.com", aud: "test-key", sub: "gid://shopify/Customer/777", exp: nowSec + 300, nbf: nowSec - 5 };
+  assert.deepEqual(verifySessionToken(`Bearer ${sign(claims)}`, creds), { shop: "tok-shop.myshopify.com", customerId: "777" });
+  assert.equal(verifySessionToken(sign({ ...claims, sub: "guest" }), creds).customerId, null);        // signed in as nobody → no account
+  const bad = (t, why) => assert.throws(() => verifySessionToken(t, creds), TokenError, why);
+  bad(sign(claims, "other-secret"), "wrong signature");
+  bad(sign({ ...claims, exp: nowSec - 60 }), "expired");
+  bad(sign({ ...claims, aud: "someone-elses-app" }), "other app");
+  bad(sign({ ...claims, dest: "https://evil.example.com" }), "not a shop");
+  bad(sign(claims, creds.secret, "none"), "alg must be HS256");
+  bad("", "no token");
+  bad("a.b.c", "garbage");
+  ok("customer accounts: session token accepted only when signed by us, for this app, unexpired, with a real shop");
+
+  // ---- importing customers and balances from a CSV / Shopify
+  const IMP = await import("../app/services/import.server.js");
+  const csvText = '﻿First Name,Last Name,E-mail,Points Balance\r\nAsha,"Rao, Jr",ASHA@Import.test,"1,200"\r\nRahul,Mehta,rahul@import.test,\r\nbad-address,X,not-an-email,50\r\nDup,Row,asha@import.test,5\r\nNeg,Ative,neg@import.test,-3\r\n';
+  const parsed = IMP.readImportRows(csvText);
+  assert.equal(parsed.rows.length, 3);
+  assert.deepEqual(parsed.rows[0], { line: 2, email: "asha@import.test", firstName: "Asha", lastName: "Rao, Jr", points: 1200 });
+  assert.equal(parsed.problems.length, 3);                                                   // bad email, duplicate, negative points
+  assert.ok(IMP.readImportRows("name,points\nA,1").error.includes("email"));
+  const imp1 = await IMP.importCustomers(store, csvText);
+  assert.deepEqual([imp1.created, imp1.matched, imp1.pointsAdded, imp1.withPoints], [3, 0, 1200, 1]);
+  const asha = await prisma.customer.findUnique({ where: { storeId_email: { storeId: store.id, email: "asha@import.test" } } });
+  assert.deepEqual([asha.pointsBalance, asha.lifetimePoints, asha.emailVerified, asha.shopifyCustomerId], [1200, 1200, false, null]);
+  const imp2 = await IMP.importCustomers(store, csvText);                                    // same file again: nothing doubles
+  assert.deepEqual([imp2.created, imp2.matched, imp2.pointsAdded, imp2.alreadyImported], [0, 3, 0, 1]);
+  assert.equal((await prisma.customer.findUnique({ where: { id: asha.id } })).pointsBalance, 1200);
+  // an imported account becomes the Shopify customer once Shopify confirms the same email
+  const stranger = await upsertCustomer(store.id, { shopifyCustomerId: "9100", email: "rahul@import.test", emailVerified: false });
+  assert.notEqual(stranger.id, (await prisma.customer.findUnique({ where: { storeId_email: { storeId: store.id, email: "rahul@import.test" } } })).id);  // an unverified Shopify email never takes over an import
+  const adoptedImport = await upsertCustomer(store.id, { shopifyCustomerId: "9101", email: "asha@import.test", emailVerified: true });
+  assert.deepEqual([adoptedImport.id === asha.id, adoptedImport.pointsBalance, adoptedImport.emailVerified, adoptedImport.shopifyCustomerId], [true, 1200, true, "9101"]);
+  const shopifyAdmin = (pages) => {
+    let i = 0;
+    return { graphql: async () => ({ json: async () => ({ data: { customers: { nodes: pages[i], pageInfo: { hasNextPage: (i += 1) < pages.length, endCursor: `c${i}` } } } }) }) };
+  };
+  const n1 = (id, email) => ({ id: `gid://shopify/Customer/${id}`, email, firstName: "S", lastName: "H", phone: null, verifiedEmail: true });
+  const si = await IMP.importShopifyCustomers(store, shopifyAdmin([[n1(8001, "s1@import.test"), n1(8002, "s2@import.test")], [n1(8003, "s3@import.test")]]));
+  assert.deepEqual([si.seen, si.created, si.existing, si.next], [3, 3, 0, null]);
+  const s1 = await prisma.customer.findFirst({ where: { storeId: store.id, shopifyCustomerId: "8001" } });
+  assert.equal(s1.pointsBalance, 0);                                                         // no welcome bonus for imports
+  const si2 = await IMP.importShopifyCustomers(store, shopifyAdmin([[n1(8001, "s1@import.test")]]));
+  assert.deepEqual([si2.created, si2.existing], [0, 1]);
+  ok("import: CSV (quotes, BOM, aliases, bad rows) and Shopify customers create accounts + balances once, no welcome bonus, imports stay unverified");
+
+  // ---- more email designs and exact spacing
+  const EM = await import("../app/lib/email/templates.js");
+  const presetIds = Object.keys(EM.EMAIL_PRESETS);
+  assert.ok(presetIds.length >= 15);
+  for (const id of presetIds) {
+    for (const kind of Object.keys(EM.EMAIL_KINDS)) {
+      const out = EM.renderEmail(kind, EM.buildPreset(kind, id), { store: "S", points: 5, balance: 9, first_name: "A", code: "CODE1", reward_name: "R", expires_at: "d", reason: "r", shop_url: "https://x.test" });
+      assert.ok(out.html.includes("<table") && !out.html.includes("undefined"), `${id}/${kind}`);
+      if (kind === "otp") assert.ok(out.html.includes("CODE1"), `${id} keeps the login code`);
+    }
+  }
+  const sp = EM.buildPreset("redeemed", "classic");
+  sp.blocks.forEach((b) => (b.style = {}));
+  sp.theme.padX = 7;
+  sp.theme.rowGap = 3;
+  const spHtml = EM.renderEmail("redeemed", sp, { store: "S", code: "C", first_name: "A", reward_name: "R", shop_url: "https://x.test" }).html;
+  assert.ok(spHtml.includes("padding:3px 7px 3px;"));                                     // theme sets every row's spacing exactly
+  sp.blocks[2].style = { padTop: 40, padX: 12 };
+  assert.ok(EM.renderEmail("redeemed", sp, { store: "S", code: "C", first_name: "A", reward_name: "R", shop_url: "https://x.test" }).html.includes("padding:40px 12px 3px"));  // a block's own spacing wins
+  assert.equal(EM.normalizeEmailTemplate("redeemed", { theme: { padX: 999, rowGap: "x" } }).theme.padX, 100);
+  assert.equal(EM.normalizeEmailTemplate("redeemed", { theme: { rowGap: "x" } }).theme.rowGap, "");
+  ok("emails: 15 designs render for all four emails; theme-wide exact spacing applies, per-block spacing overrides it, bad values are clamped");
 
   // ---- analytics
   await postTransaction({ storeId: store.id, customerId: dana.id, type: "ADJUST", points: 10, source: "manual", idempotencyKey: "an1" });

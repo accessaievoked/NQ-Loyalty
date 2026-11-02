@@ -2,17 +2,13 @@ import { randomBytes } from "node:crypto";
 import prisma from "../db.server.js";
 import { decrypt, encrypt, safeEqual } from "../lib/crypto.server.js";
 import { creditPoints } from "./credit.server.js";
-import { cancelOrderPoints, evaluateOrder } from "./orders.server.js";
 import { ensureJudgeMeSchedule, removeJudgeMeSchedule } from "../queue/queue.server.js";
 
 // Third-party integrations. Each one is optional, per store, and its credentials are encrypted.
 //
 //  Judge.me  — customers earn points for good product reviews.
 //              Reviews arrive by webhook (when Judge.me can reach us) and by polling every
-//              30 minutes (so nothing is missed). Either path is idempotent.
-//  Shiprocket — delivery/return status drives when order points are credited or taken back.
-//              Shiprocket calls our webhook; we match the shipment to the order by AWB number
-//              (copied from the Shopify fulfillment) or by order id.
+//              few hours (so nothing is missed). Either path is idempotent.
 //
 // The exact field names these services send are not fully documented publicly, so parsing is
 // deliberately tolerant, and the last event / error is saved for the merchant to see.
@@ -207,76 +203,4 @@ export async function handleJudgeMeWebhook(integration, body) {
   const outcome = await processReview(store, review);
   await record(integration.id, { lastEventAt: new Date(), lastError: null });
   return outcome;
-}
-
-// ---------------------------------------------------------------------------------------
-// Shiprocket
-// ---------------------------------------------------------------------------------------
-
-export async function connectShiprocket({ store }) {
-  const integration = await ensureIntegration(store.id, "SHIPROCKET");
-  await prisma.integration.update({ where: { id: integration.id }, data: { enabled: true, lastError: null } });
-  return getIntegration(store.id, "SHIPROCKET");
-}
-
-/** Map a Shiprocket status label to what it means for points. */
-export function classifyShipment(statusRaw) {
-  const s = String(statusRaw ?? "").trim().toLowerCase();
-  if (!s) return "unknown";
-  // "RTO Delivered" means the parcel went BACK to the seller, so check returns first.
-  if (/\brto\b|return(ed)? to (origin|seller)|undelivered|lost|destroyed|cancel(l)?ed|rejected by customer/.test(s)) return "returned";
-  if (/^delivered$|\bdelivered\b/.test(s)) return "delivered";
-  if (/picked up|shipped|in transit|out for delivery|reached|dispatched|pickup/.test(s)) return "shipped";
-  return "other";
-}
-
-const stripHash = (v) => String(v ?? "").replace(/^#/, "").trim();
-
-async function findOrderForShipment(storeId, { awb, orderRef }) {
-  if (awb) {
-    const byAwb = await prisma.order.findFirst({ where: { storeId, trackingNumbers: { has: String(awb) } } });
-    if (byAwb) return byAwb;
-  }
-  const ref = stripHash(orderRef);
-  if (ref) {
-    return prisma.order.findFirst({
-      where: { storeId, OR: [{ shopifyOrderId: ref }, { orderName: `#${ref}` }, { orderName: ref }] },
-    });
-  }
-  return null;
-}
-
-export async function handleShiprocketWebhook(integration, body) {
-  const store = await prisma.store.findUnique({ where: { id: integration.storeId }, include: { settings: true } });
-  const awb = body?.awb ?? body?.awb_code ?? body?.tracking_number;
-  const status = body?.current_status ?? body?.shipment_status ?? body?.status;
-  const orderRef = body?.order_id ?? body?.channel_order_id ?? body?.sr_order_id;
-  const when = body?.current_timestamp ? new Date(String(body.current_timestamp).replace(" ", "T")) : new Date();
-  const at = Number.isNaN(when.getTime()) ? new Date() : when;
-
-  await record(integration.id, { lastEventAt: new Date(), lastError: null });
-  const kind = classifyShipment(status);
-  const order = await findOrderForShipment(store.id, { awb, orderRef });
-  if (!order) return `no matching order (awb=${awb ?? "-"}, ref=${orderRef ?? "-"})`;
-
-  const patch = { shipmentStatus: String(status ?? "").slice(0, 80) };
-  if (awb && !order.trackingNumbers.includes(String(awb))) patch.trackingNumbers = [...order.trackingNumbers, String(awb)];
-
-  if (kind === "delivered" && !order.returnedAt) {
-    // Keep the first delivery time: later "delivered" pings must not push the return window out.
-    if (!order.deliveredAt) patch.deliveredAt = at;
-  } else if (kind === "returned" && !order.returnedAt) {
-    patch.returnedAt = at;
-  }
-
-  const updated = await prisma.order.update({ where: { id: order.id }, data: patch });
-  if (kind === "returned" && patch.returnedAt) {
-    await cancelOrderPoints(store, updated, "Returned");
-    return "returned: points cancelled or reversed";
-  }
-  if (kind === "delivered") {
-    const award = await evaluateOrder(store, updated);
-    return award ? `delivered: award ${award.status.toLowerCase()}` : "delivered";
-  }
-  return `status saved: ${status}`;
 }

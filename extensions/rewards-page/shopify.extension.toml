@@ -1,0 +1,17 @@
+api_version = "2026-07"
+
+# The "My Rewards" page in Shopify's new customer accounts.
+# After deploying, add it to the account menu: Settings → Customer accounts → Customize → Menu.
+[[extensions]]
+name = "My Rewards"
+handle = "rewards-page"
+uid = "22d03945-8da0-d324-0b76-e176009f2c102db93966"
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/FullPageExtension.jsx"
+  target = "customer-account.page.render"
+
+  # The page talks to this app's server to read the customer's points and redeem rewards.
+  [extensions.capabilities]
+  network_access = true

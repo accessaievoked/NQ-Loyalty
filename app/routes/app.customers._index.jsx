@@ -2,8 +2,10 @@ import { Form, useLoaderData } from "react-router";
 import { requireStore } from "../services/auth.server";
 import db from "../db.server";
 import { referralCounts } from "../services/referralstats.server";
+import BackButton from "../components/BackButton";
 
 const PAGE = 25;
+const fmt = (n) => new Intl.NumberFormat("en-IN").format(n);
 
 export const loader = async ({ request }) => {
   const { store } = await requireStore(request);
@@ -56,6 +58,10 @@ export default function Customers() {
 
   return (
     <s-page heading="Customers">
+      <s-button slot="primary-action" variant="primary" icon="import" href="/app/customers/import">
+        Import customers
+      </s-button>
+      <BackButton href="/app" label="Back to home" />
       <s-section>
         <s-stack gap="base">
           <Form method="get">
@@ -67,15 +73,14 @@ export default function Customers() {
 
           {rows.length === 0 ? (
             <s-paragraph>
-              {q ? "No customers match that search." : "No members yet. They're added when a logged-in customer opens the widget or places an order."}
+              {q ? "No customers match that search." : "No members yet. They're added when a logged-in customer opens the widget or places an order, or you can import them."}
             </s-paragraph>
           ) : (
             <s-table>
               <s-table-header-row>
-                <s-table-header>Customer</s-table-header>
-                <s-table-header>Email</s-table-header>
-                <s-table-header format="numeric">Balance</s-table-header>
-                <s-table-header format="numeric">Lifetime</s-table-header>
+                <s-table-header listSlot="primary">Customer</s-table-header>
+                <s-table-header format="numeric">Points</s-table-header>
+                <s-table-header format="numeric">Earned in total</s-table-header>
                 <s-table-header format="numeric">Referred</s-table-header>
                 <s-table-header>Joined</s-table-header>
               </s-table-header-row>
@@ -83,11 +88,13 @@ export default function Customers() {
                 {rows.map((c) => (
                   <s-table-row key={c.id}>
                     <s-table-cell>
-                      <s-link href={`/app/customers/${c.id}`}>{c.name}</s-link>
+                      <s-stack gap="small-500">
+                        <s-link href={`/app/customers/${c.id}`}>{c.name === "—" ? c.email : c.name}</s-link>
+                        {c.name !== "—" && <s-text color="subdued">{c.email}</s-text>}
+                      </s-stack>
                     </s-table-cell>
-                    <s-table-cell>{c.email}</s-table-cell>
-                    <s-table-cell>{c.balance}</s-table-cell>
-                    <s-table-cell>{c.lifetime}</s-table-cell>
+                    <s-table-cell>{fmt(c.balance)}</s-table-cell>
+                    <s-table-cell>{fmt(c.lifetime)}</s-table-cell>
                     <s-table-cell>{c.referred}</s-table-cell>
                     <s-table-cell>{c.joined}</s-table-cell>
                   </s-table-row>
@@ -101,12 +108,8 @@ export default function Customers() {
               {total} member{total === 1 ? "" : "s"} · page {page} of {pages}
             </s-text>
             <s-stack direction="inline" gap="small">
-              <s-button disabled={page <= 1 || undefined} href={link(page - 1)}>
-                Previous
-              </s-button>
-              <s-button disabled={page >= pages || undefined} href={link(page + 1)}>
-                Next
-              </s-button>
+              <s-button icon="chevron-left" accessibilityLabel="Previous page" disabled={page <= 1 || undefined} href={link(page - 1)} />
+              <s-button icon="chevron-right" accessibilityLabel="Next page" disabled={page >= pages || undefined} href={link(page + 1)} />
             </s-stack>
           </s-stack>
         </s-stack>

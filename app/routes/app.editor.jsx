@@ -7,6 +7,7 @@ import { describeReward, earnLines, variableOf } from "../services/storefront.se
 import db from "../db.server";
 import {
   AUDIENCES,
+  BLOCK_STYLE_FIELDS,
   BLOCK_TYPES,
   FONTS,
   POSITIONS,
@@ -19,8 +20,9 @@ import {
 } from "../lib/widget/defaults";
 import WidgetPreview from "../components/WidgetPreview";
 import { formatMoney } from "../lib/widget/render";
-import { BlockField, ColorField, RangeField, Row, SelectField, Toggle } from "../components/EditorControls";
+import { BlockField, ColorField, RangeField, Row, SelectField, StyleField, Toggle } from "../components/EditorControls";
 import WidgetReference from "../components/WidgetReference";
+import { ArrowLeft } from "../components/BackButton";
 import "../styles/editor.css";
 
 export const loader = async ({ request }) => {
@@ -90,7 +92,8 @@ export default function Editor() {
   const shopify = useAppBridge();
 
   const [config, setConfig] = useState(data.config);
-  const [mode, setMode] = useState(data.displayMode);
+  const [mode, setMode] = useState(data.displayMode); // saved: WIDGET | PAGE
+  const [view, setView] = useState(data.displayMode); // what the preview shows: WIDGET | PAGE | DRAWER
   const [savedKey, setSavedKey] = useState(() => JSON.stringify([data.config, data.displayMode]));
   const [tab, setTab] = useState("layout"); // layout | theme | launcher | code
   const [selectedId, setSelectedId] = useState(null);
@@ -175,6 +178,19 @@ export default function Editor() {
 
   // --- mutations
   const setTheme = (patch, key) => apply((c) => ({ ...c, theme: { ...c.theme, ...patch } }), key);
+  const setAccount = (patch, key) => apply((c) => ({ ...c, account: { ...c.account, ...patch } }), key);
+  // Style values: "" clears the key so the block inherits the theme again.
+  const setStyle = (id, k, v) =>
+    setBlock(
+      id,
+      (b) => {
+        const style = { ...(b.style || {}) };
+        if (v === "" || v === undefined || v === null) delete style[k];
+        else style[k] = v;
+        return { ...b, style };
+      },
+      `${id}.style.${k}`,
+    );
   const setLauncher = (patch, key) => apply((c) => ({ ...c, launcher: { ...c.launcher, ...patch } }), key);
   const setBlock = (id, fn, key) =>
     apply((c) => ({ ...c, blocks: c.blocks.map((b) => (b.id === id ? fn(b) : b)) }), key);
@@ -292,8 +308,8 @@ export default function Editor() {
       {/* top bar */}
       <header className="ed-top">
         <div className="ed-top-left">
-          <Link to="/app/appearance" className="ed-back" aria-label="Back">
-            ←
+          <Link to="/app" replace className="ed-back" aria-label="Back to home">
+            <ArrowLeft />
           </Link>
           <div>
             <div className="ed-title">Storefront editor</div>
@@ -303,11 +319,14 @@ export default function Editor() {
 
         <div className="ed-top-center">
           <div className="ed-seg" role="group" aria-label="Display">
-            <button type="button" className={mode === "WIDGET" ? "on" : ""} onClick={() => setMode("WIDGET")}>
+            <button type="button" className={view === "WIDGET" ? "on" : ""} onClick={() => { setMode("WIDGET"); setView("WIDGET"); }}>
               Floating widget
             </button>
-            <button type="button" className={mode === "PAGE" ? "on" : ""} onClick={() => setMode("PAGE")}>
+            <button type="button" className={view === "PAGE" ? "on" : ""} onClick={() => { setMode("PAGE"); setView("PAGE"); }}>
               Rewards page
+            </button>
+            <button type="button" className={view === "DRAWER" ? "on" : ""} onClick={() => setView("DRAWER")} title="The side drawer opened by the My Rewards tab (preview only)">
+              Account drawer
             </button>
           </div>
           <div className="ed-seg" role="group" aria-label="Device">
@@ -348,7 +367,7 @@ export default function Editor() {
             <div className="ed-pane">
               <div className="ed-pane-head">
                 <button type="button" className="ed-back" onClick={() => setSelectedId(null)} aria-label="Back to layout">
-                  ←
+                  <ArrowLeft />
                 </button>
                 <div>
                   <div className="ed-pane-title">{def.label}</div>
@@ -367,6 +386,23 @@ export default function Editor() {
                   onChange={(v) => setSetting(selected.id, "audience", v)}
                 />
                 <Toggle label="Visible" checked={selected.visible} onChange={(v) => setBlock(selected.id, (b) => ({ ...b, visible: v }))} />
+                <div className="ed-divider" />
+                <div className="ed-section-title">Style</div>
+                <p className="ed-help">Colours, spacing and text for just this block. Anything left on “theme default” follows your Theme tab.</p>
+                {BLOCK_STYLE_FIELDS.map((f) => (
+                  <StyleField
+                    key={f.key}
+                    def={f}
+                    value={selected.style?.[f.key]}
+                    onChange={(v) => setStyle(selected.id, f.key, v)}
+                  />
+                ))}
+                {selected.style && Object.keys(selected.style).length > 0 && (
+                  <button type="button" className="ed-btn wide" onClick={() => setBlock(selected.id, (b) => ({ ...b, style: {} }))}>
+                    Reset this block's style
+                  </button>
+                )}
+                <div className="ed-divider" />
                 <button type="button" className="ed-btn danger wide" onClick={() => removeBlock(selected.id)}>
                   Remove block
                 </button>
@@ -537,6 +573,25 @@ export default function Editor() {
                       onChange={(v) => setLauncher({ visibility: v })}
                     />
                     <Toggle label="Full-screen panel on mobile" checked={config.launcher.mobileFullscreen} onChange={(v) => setLauncher({ mobileFullscreen: v })} />
+
+                    <div className="ed-section-title">Account page tab</div>
+                    <p className="ed-help">
+                      Adds a “My Rewards” entry to your customer account menu. It opens your rewards in a side drawer, and shoppers are already logged in, so there's no extra sign-in.
+                    </p>
+                    <Toggle label="Add the tab automatically" checked={config.account.tab} onChange={(v) => setAccount({ tab: v })} />
+                    <Row label="Tab label">
+                      <input className="ed-input" value={config.account.label} onChange={(e) => setAccount({ label: e.target.value }, "alabel")} />
+                    </Row>
+                    <Row label="Tab icon" help="An emoji or short character.">
+                      <input className="ed-input" value={config.account.icon} onChange={(e) => setAccount({ icon: e.target.value }, "aicon")} />
+                    </Row>
+                    <RangeField label="Drawer width" value={config.account.drawerWidth} min={320} max={560} onChange={(v) => setAccount({ drawerWidth: v }, "adw")} />
+                    <Row label="Menu selector (optional)" help="Only if the tab doesn't appear: a CSS selector for your account menu, like .account-nav. The tab is added before its last item.">
+                      <input className="ed-input" value={config.account.selector} onChange={(e) => setAccount({ selector: e.target.value }, "asel")} placeholder=".account-nav" spellCheck={false} />
+                    </Row>
+                    <p className="ed-help">
+                      Prefer your own link? Add a menu item (or any button) that links to <code>#loyalty</code>, or give it the attribute <code>data-loyalty-open</code>, and it opens the same drawer.
+                    </p>
                   </>
                 )}
 
@@ -667,10 +722,10 @@ export default function Editor() {
                 </div>
               </div>
               <WidgetPreview
-                key={`${mode}-${mobile}`}
+                key={`${view}-${mobile}`}
                 config={config}
                 state={state}
-                mode={mode}
+                mode={view}
                 mobile={mobile}
                 selectedId={selectedId}
                 onSelect={(id) => setSelectedId(id)}

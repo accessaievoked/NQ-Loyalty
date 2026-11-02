@@ -22,7 +22,7 @@ production). Shopify keys are injected by `shopify app dev`.
 Check everything end to end against the database (each uses a throwaway store and deletes it):
 
 - `node scripts/smoke-test.mjs` — points, orders, refunds, redeem, expiry
-- `node scripts/smoke-test-features.mjs` — email login, referrals, reviews, Shiprocket, analytics
+- `node scripts/smoke-test-features.mjs` — email login, referrals, reviews, delivery/returns, checkout accounts, emails, analytics
 
 ## How it's organised
 
@@ -35,8 +35,10 @@ Check everything end to end against the database (each uses a throwaway store an
 | Email-code (OTP) login and sessions | `app/services/identity.server.js` |
 | Referrals | `app/services/referrals.server.js` |
 | Redeem → Shopify discount code (refund on failure) | `app/services/redeem.server.js` |
-| Judge.me / Shiprocket | `app/services/integrations.server.js`, `app/routes/integrations.*` |
+| Judge.me reviews | `app/services/integrations.server.js`, `app/routes/integrations.judgeme.$storeId.jsx` |
+| Delivery + returns (from Shopify) | `app/services/orders.server.js`, `app/services/returns.server.js` |
 | Analytics | `app/services/analytics.server.js`, `app/routes/app.analytics.jsx` |
+| Account-page tab + side drawer | `app/lib/widget/runtime.js`, `app/lib/widget/render.js` |
 | Emails (SMTP, deduped) / reminders | `mailer`, `notify`, `credit`, `reminders` `.server.js` |
 | Editable email templates (blocks or HTML) | `app/lib/email/templates.js`, `app/services/emailtemplates.server.js`, `app/routes/app.emails.jsx` |
 | Developer source (full CSS/HTML, rollback) | `app/services/devsource.server.js`, `app/routes/app.developer.jsx` |
@@ -72,6 +74,43 @@ Check everything end to end against the database (each uses a throwaway store an
 - **Email templates.** Each email kind renders from the store's template (blocks or HTML) or the
   built-in default; a broken template falls back to the default, and the login email must contain
   `{{code}}`.
-- **Integrations.** Judge.me reviews arrive by webhook and a 6-hourly poll that only exists while a store has Judge.me connected; Shiprocket calls a
-  token-protected webhook. Credentials are AES-GCM encrypted. Field names are parsed tolerantly
-  because neither provider fully documents its payloads publicly.
+- **Delivery and returns come from Shopify.** Delivery uses fulfillment `shipment_status` and
+  events. A return in progress (`REQUESTED` / `OPEN`) holds waiting points; a completed one
+  (`CLOSED`) cancels them for good (or reverses ones already credited); a declined or cancelled
+  one lets crediting resume. No carrier integration is needed.
+- **Whose points?** A shopper with a store account earns on their own account. A guest checkout
+  earns on the account open in the widget (a signed `loyalty_ref` on the cart); a forged reference
+  is ignored.
+- **Reviews.** Judge.me reviews arrive by webhook and a 6-hourly poll that only exists while a
+  store has Judge.me connected. The token is AES-GCM encrypted, and field names are parsed
+  tolerantly because the payload is not fully documented.
+
+## New customer accounts (shopify.com/…/account)
+
+Shopify's new customer accounts can't run theme scripts, so "My Rewards" ships as two UI extensions
+(`extensions/rewards-page`, `extensions/rewards-profile-block`) sharing `extensions/shared`:
+
+- **My Rewards page** – a full page in the account. Add it to the menu in
+  *Settings → Customer accounts → Customize* (add the "My Rewards" menu item).
+- **Loyalty rewards block** – a points card with a "View rewards" button for the Profile and Orders
+  pages. Place it in the same editor (*Add block → Loyalty rewards*).
+
+Both call `POST /customer-account/api`, authenticated by Shopify's session token (a JWT verified with
+the app secret in `app/services/customeraccount.server.js`), so the customer is the signed-in one —
+no OTP. Run `shopify app dev` (or `npm run deploy`) to push the extensions. Discount codes are shown
+as selectable text (extensions cannot use the clipboard).
+
+## Importing existing members
+
+Customers → **Import customers**:
+
+- **From Shopify** – creates a rewards account for every customer already in the store (no points, no welcome bonus).
+- **From a CSV** – `email` is required; `first_name`, `last_name` (or `name`) and `points` are optional. Up to 2,000 rows per file,
+  re-running a file never gives the points twice. Imported accounts start unverified; when Shopify later reports the same
+  *verified* email they merge into that customer with their points intact.
+
+## Emails
+
+15 ready-made designs (Emails → Design). Spacing is exact: the theme sets side spacing and an optional row spacing for every
+row, and each block can override space above/below/sides. Every slider has a box for typing the exact pixel value.
+

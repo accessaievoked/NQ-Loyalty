@@ -1,0 +1,12 @@
+{
+  "name": "rewards-profile-block",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@shopify/ui-extensions": "~2026.7.4",
+    "@preact/signals": "^2.2.0",
+    "preact": "^10.25.0"
+  }
+}

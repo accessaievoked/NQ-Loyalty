@@ -235,9 +235,7 @@ function renderBlock(block, state) {
           const actions = active
             ? `<span class="lw-btns"><button class="lw-btn lw-btn-sm lw-btn-outline" data-action="copy" data-code="${esc(
                 c.code,
-              )}" type="button">Copy</button><button class="lw-btn lw-btn-sm" data-action="apply" data-code="${esc(
-                c.code,
-              )}" type="button">Use at checkout</button></span>`
+              )}" type="button">Copy</button></span>`
             : "";
           return `<li class="lw-card lw-reward${active ? "" : " lw-dim"}"><span class="lw-grow"><span class="lw-code">${esc(
             c.code,
@@ -268,9 +266,7 @@ function renderBlock(block, state) {
           const actions = active
             ? `<span class="lw-btns"><button class="lw-btn lw-btn-sm lw-btn-outline" data-action="copy" data-code="${esc(
                 r.code,
-              )}" type="button">Copy</button><button class="lw-btn lw-btn-sm" data-action="apply" data-code="${esc(
-                r.code,
-              )}" type="button">Use at checkout</button></span>`
+              )}" type="button">Copy</button></span>`
             : "";
           return `<li class="lw-act"><details><summary class="lw-row lw-sum">${head}<span class="lw-chev" aria-hidden="true">›</span></summary>
             <div class="lw-act-body"><span class="lw-grow"><span class="lw-code">${esc(r.code)}</span> ${badge}${
@@ -318,14 +314,59 @@ function blockVisible(block, state) {
 }
 
 // Each block is wrapped so the editor preview can map a click back to its block.
+// Black or white, whichever reads better on this background colour.
+function readableOn(hex) {
+  const h = String(hex).replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6);
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return "#ffffff";
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.6 ? "#111827" : "#ffffff";
+}
+
+// A block's own look as inline CSS. Colours are re-validated here as well as when saving, since
+// this ends up in a style attribute. Empty values simply inherit the theme.
+function blockInline(block) {
+  const s = block.style;
+  if (!s) return "";
+  const hex = (v) => (typeof v === "string" && /^#[0-9a-fA-F]{3,8}$/.test(v) ? v : "");
+  const num = (v, lo, hi) => (Number.isFinite(Number(v)) && v !== "" && v != null ? Math.min(hi, Math.max(lo, Number(v))) : null);
+  const css = [];
+  const isHeader = block.type === "header";
+  if (hex(s.bg)) css.push(isHeader ? `--hbg:${s.bg}` : `background:${s.bg}`);
+  if (hex(s.text)) {
+    css.push(`color:${s.text}`, `--tx:${s.text}`, `--mu:color-mix(in srgb, ${s.text} 62%, transparent)`);
+    if (isHeader) css.push(`--hfg:${s.text}`);
+  }
+  if (hex(s.accent)) css.push(`--p:${s.accent}`, `--pt:${readableOn(s.accent)}`);
+  if (hex(s.cardBg)) css.push(`--sf:${s.cardBg}`);
+  if (hex(s.border)) css.push(`--bd:${s.border}`);
+  const r = num(s.radius, 0, 40);
+  if (r != null) css.push(`--r:${r}px`);
+  const p = num(s.pad, 0, 40);
+  if (p != null) css.push(`--pad:${p}px`);
+  const pb = num(s.padBottom, 0, 60);
+  if (pb != null) css.push(`padding-bottom:${pb}px`);
+  const fs = num(s.fontSize, 10, 28);
+  if (fs != null) css.push(`font-size:${fs}px`);
+  if (["400", "500", "600", "700", "800"].includes(String(s.weight))) css.push(`font-weight:${s.weight}`);
+  if (["left", "center", "right"].includes(s.align)) css.push(`text-align:${s.align}`);
+  return css.join(";");
+}
+
+function blockWrapper(block, inner, selectedId) {
+  const hide = block.style && block.style.hideOn ? ` lw-hide-${block.style.hideOn === "mobile" ? "mobile" : "desktop"}` : "";
+  const style = blockInline(block);
+  return `<div class="lw-bw${block.id === selectedId ? " lw-selected" : ""}${hide}" data-bid="${esc(block.id)}"${style ? ` style="${esc(style)}"` : ""}>${inner}</div>`;
+}
+
 export function renderBlocks(config, state, selectedId) {
   if (config.custom && config.custom.mode === "html") return renderHtmlTemplate(config, state, selectedId);
   return config.blocks
     .filter((b) => blockVisible(b, state))
     .map((b) => {
       const html = renderBlock(b, state);
-      if (!html) return "";
-      return `<div class="lw-bw${b.id === selectedId ? " lw-selected" : ""}" data-bid="${esc(b.id)}">${html}</div>`;
+      return html ? blockWrapper(b, html, selectedId) : "";
     })
     .join("");
 }
@@ -338,12 +379,26 @@ function renderHtmlTemplate(config, state, selectedId) {
     const block = config.blocks.find((b) => b.type === type);
     if (!block || !blockVisible(block, state)) return "";
     const inner = renderBlock(block, state);
-    return inner ? `<div class="lw-bw${block.id === selectedId ? " lw-selected" : ""}" data-bid="${esc(block.id)}">${inner}</div>` : "";
+    return inner ? blockWrapper(block, inner, selectedId) : "";
   });
   return `<div class="lw-tpl">${sanitizeHtml(fillVars(html, state))}</div>`;
 }
 
 // --- styles ----------------------------------------------------------------------------
+
+/** Side-drawer rules. Kept separate so they are also added when a developer replaces the CSS. */
+export function drawerCss(config) {
+  const w = (config.account && config.account.drawerWidth) || 420;
+  return `
+.lw-is-drawer .lw-backdrop { position: fixed; inset: 0; z-index: 2147483000; background: rgba(15, 23, 42, .45); animation: lw-fade .2s ease-out; }
+.lw-is-drawer .lw-backdrop[hidden] { display: none; }
+.lw-is-drawer .lw-panel { position: fixed; z-index: 2147483001; top: 0; right: 0; bottom: 0; left: auto; width: min(${w}px, 100vw); max-width: 100vw; max-height: none; border-radius: 0; border-width: 0 0 0 1px; }
+.lw-is-drawer .lw-panel.lw-anim { animation: lw-slide .26s cubic-bezier(.2, .8, .2, 1); }
+.lw-is-drawer.lw-preview .lw-backdrop, .lw-is-drawer.lw-preview .lw-panel { position: absolute; }
+@keyframes lw-slide { from { transform: translateX(100%); } to { transform: none; } }
+@keyframes lw-fade { from { opacity: 0; } to { opacity: 1; } }
+`;
+}
 
 export function widgetCss(config) {
   const t = config.theme;
@@ -351,12 +406,17 @@ export function widgetCss(config) {
   const font = (FONTS[t.font] || FONTS.system).stack;
   const pad = t.density === "compact" ? 12 : 18;
   const [v, h] = l.position.split("-");
-  const header =
+  // The header's colours go through --hbg / --hfg so a block's own style can override them.
+  const headerBg =
     t.headerStyle === "gradient"
-      ? `background: linear-gradient(135deg, ${t.primary}, color-mix(in srgb, ${t.primary} 60%, #ec4899)); color: ${t.primaryText};`
+      ? `linear-gradient(135deg, ${t.primary}, color-mix(in srgb, ${t.primary} 60%, #ec4899))`
       : t.headerStyle === "plain"
-        ? `background: transparent; color: ${t.text}; border-bottom: 1px solid ${t.border};`
-        : `background: ${t.primary}; color: ${t.primaryText};`;
+        ? "transparent"
+        : t.primary;
+  const headerFg = t.headerStyle === "plain" ? t.text : t.primaryText;
+  const header = `background: var(--hbg, ${headerBg}); color: var(--hfg, ${headerFg});${
+    t.headerStyle === "plain" ? ` border-bottom: 1px solid ${t.border};` : ""
+  }`;
 
   return `
 :host { all: initial; }
@@ -494,6 +554,7 @@ export function widgetCss(config) {
 .lw-preview .lw-bw { cursor: pointer; outline: 2px solid transparent; outline-offset: -2px; transition: outline-color .12s; }
 .lw-preview .lw-bw:hover { outline-color: color-mix(in srgb, var(--p) 45%, transparent); }
 .lw-preview .lw-bw.lw-selected { outline-color: var(--p); }
+${drawerCss(config)}
 .lw-toast { position: absolute; left: 16px; right: 16px; bottom: 16px; padding: 10px 14px; border-radius: var(--r); background: var(--tx); color: var(--bg); font-size: 13px; text-align: center; z-index: 3; }
 
 .lw-root.lw-mobile .lw-launcher-wrap { ${v}: ${Math.min(l.offsetY, 24)}px; ${h}: ${Math.min(l.offsetX, 16)}px; }
@@ -531,6 +592,15 @@ export const DEFAULT_SHELL = `<div class="{{root_classes}}">
   </div>
 </div>`;
 
+// The "My Rewards" side drawer opened from the customer account page (or any [data-loyalty-open]).
+export const DEFAULT_DRAWER_SHELL = `<div class="{{root_classes}}">
+  <div class="lw-backdrop" data-action="toggle" {{panel_hidden}}></div>
+  <aside class="{{panel_classes}}" role="dialog" aria-modal="true" aria-label="{{launcher_label}}" {{panel_hidden}}>
+    <button class="lw-close" data-action="toggle" type="button" aria-label="Close">×</button>
+    <div class="lw-body">{{content}}</div>
+  </aside>
+</div>`;
+
 export const DEFAULT_PAGE_SHELL = `<div class="{{root_classes}}">
   <div class="lw-page">
     <div class="lw-body">{{content}}</div>
@@ -565,6 +635,7 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
   let state = initialState;
   // The editor passes "PAGE"/"WIDGET" (database enum), the storefront "page"/"widget".
   const isPage = String(opts.mode).toLowerCase() === "page";
+  const isDrawer = String(opts.mode).toLowerCase() === "drawer";
   let open = isPage ? true : !!opts.startOpen;
   let selectedId = null;
   let toastTimer;
@@ -599,6 +670,18 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
   // replay it, or the panel appears to close and reopen.
   let justOpened = false;
 
+  // Every open/close goes through here: it replays the open animation only on a real open, locks
+  // page scrolling behind the drawer, and tells the host page (e.g. to forget the drawer).
+  function toggleOpen(next) {
+    open = next === undefined ? !open : !!next;
+    justOpened = open;
+    if (isDrawer && !opts.preview && typeof document !== "undefined") {
+      document.documentElement.style.overflow = open ? "hidden" : "";
+    }
+    draw();
+    if (opts.onToggle) opts.onToggle(open);
+  }
+
   function paint() {
     const mobile = isMobile();
     const vis = config.launcher.visibility;
@@ -608,13 +691,13 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
     const anim = justOpened;
     justOpened = false;
 
-    if (!isPage && hiddenHere) {
+    if (!isPage && !isDrawer && hiddenHere) {
       root.innerHTML = "";
       return;
     }
 
     const values = {
-      root_classes: `lw-root${mobile ? " lw-mobile" : ""}${opts.preview ? " lw-preview" : ""}${isPage ? " lw-is-page" : ""}`,
+      root_classes: `lw-root${mobile ? " lw-mobile" : ""}${opts.preview ? " lw-preview" : ""}${isPage ? " lw-is-page" : ""}${isDrawer ? " lw-is-drawer" : ""}`,
       panel_classes: `lw-panel${anim ? " lw-anim" : ""}`,
       panel_hidden: open ? "" : "hidden",
       expanded: String(open),
@@ -631,7 +714,7 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
     let css = dev && dev.css ? dev.css : "";
     let html = "";
     try {
-      const customShell = dev && (isPage ? dev.pageShell : dev.shell);
+      const customShell = !isDrawer && dev && (isPage ? dev.pageShell : dev.shell);
       // A shell without {{content}} would hide everything, so it is ignored.
       if (customShell && /\{\{\s*content\s*\}\}/.test(customShell)) {
         html = sanitizeHtml(fillShell(customShell, values, RAW));
@@ -639,8 +722,9 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
     } catch (e) {
       html = "";
     }
-    if (!html) html = fillShell(isPage ? DEFAULT_PAGE_SHELL : DEFAULT_SHELL, values, RAW);
+    if (!html) html = fillShell(isDrawer ? DEFAULT_DRAWER_SHELL : isPage ? DEFAULT_PAGE_SHELL : DEFAULT_SHELL, values, RAW);
     if (!css) css = widgetCss(config);
+    else if (isDrawer) css += drawerCss(config); // a developer's CSS predates the drawer, so add its rules
     root.innerHTML = `<style>${css}</style>${html}`;
   }
 
@@ -649,9 +733,7 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
     if (opts.preview) {
       // Editor preview: clicking a block selects it; the launcher still toggles the panel.
       if (el?.dataset.action === "toggle") {
-        open = !open;
-        justOpened = open;
-        draw();
+        toggleOpen();
         return;
       }
       const bw = e.target.closest?.("[data-bid]");
@@ -661,9 +743,7 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
     if (!el || el.disabled) return;
     const action = el.dataset.action;
     if (action === "toggle") {
-      open = !open;
-      justOpened = open;
-      draw();
+      toggleOpen();
       return;
     }
     if (action === "copy") {
@@ -708,6 +788,12 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
   }
   root.addEventListener("keydown", onKeydown);
 
+  // Escape closes the drawer.
+  function onEscape(e) {
+    if (e.key === "Escape" && open && isDrawer) toggleOpen(false);
+  }
+  if (isDrawer && !opts.preview) document.addEventListener("keydown", onEscape);
+
   const api = {
     update(nextConfig, nextState) {
       config = nextConfig ?? config;
@@ -715,9 +801,10 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
       draw();
     },
     setOpen(v) {
-      open = !!v;
-      justOpened = open;
-      draw();
+      toggleOpen(!!v);
+    },
+    isOpen() {
+      return open;
     },
     select(id) {
       selectedId = id;
@@ -752,6 +839,10 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
       root.removeEventListener("click", onClick);
       root.removeEventListener("input", onInput);
       root.removeEventListener("keydown", onKeydown);
+      if (isDrawer && !opts.preview) {
+        document.removeEventListener("keydown", onEscape);
+        document.documentElement.style.overflow = "";
+      }
       window.removeEventListener("resize", draw);
       root.innerHTML = "";
     },
@@ -761,5 +852,7 @@ export function createWidget(host, initialConfig, initialState, opts = {}) {
     window.addEventListener("resize", draw);
   }
   draw();
+  // A drawer that starts open (opened by the shopper's click) locks page scrolling from the start.
+  if (isDrawer && open && !opts.preview && typeof document !== "undefined") document.documentElement.style.overflow = "hidden";
   return api;
 }

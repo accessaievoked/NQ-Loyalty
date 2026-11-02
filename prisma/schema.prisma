@@ -209,6 +209,9 @@ model Order {
   shipmentStatus  String?
   // Returned to origin / lost: points are reversed or never awarded.
   returnedAt      DateTime?
+  // Shopify's own return status for this order: REQUESTED | OPEN (in progress: points are held),
+  // CLOSED (item came back: points are cancelled), DECLINED | CANCELED (back to normal).
+  returnStatus    String?
   // Value of loyalty (LOY-…) discount codes applied on this order, for analytics.
   loyaltyDiscount Decimal   @default(0) @db.Decimal(14, 2)
   discountCodes   String[]  @default([])

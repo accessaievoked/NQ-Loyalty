@@ -4,6 +4,7 @@ import { requireStore } from "../services/auth.server";
 import { loadAnalytics } from "../services/analytics.server";
 import { getFx } from "../services/currency.server";
 import { RANGE_PRESETS, resolveRange } from "../lib/analytics-ranges";
+import BackButton from "../components/BackButton";
 
 export const loader = async ({ request }) => {
   const { store } = await requireStore(request);
@@ -134,6 +135,7 @@ export default function Analytics() {
 
   return (
     <s-page heading="Loyalty analytics">
+      <BackButton href="/app" label="Back to home" />
       <s-section>
         <s-stack direction="inline" gap="base" alignItems="end">
           <s-select label="Period" name="range" value={choice} onChange={(e) => pick(e.currentTarget.value)}>
@@ -174,14 +176,12 @@ export default function Analytics() {
           <>
             Amounts are shown in <s-text type="strong">{d.currency}</s-text>, converted from your store currency ({d.fx.from}) at 1 {d.fx.from} ={" "}
             {d.fx.rate.toFixed(4)} {d.fx.to}
-            {d.fx.manual ? " (your own rate)" : d.fx.updatedAt ? ` (live rate, updated ${d.fx.updatedAt.slice(0, 10)})` : ""}
-            {d.fx.stale ? " — the rate service is unreachable, so the last saved rate is used" : ""}. Rewards and discount codes stay in {d.fx.from}.{" "}
-            <s-link href="/app/settings">Change currency</s-link>
+            {d.fx.updatedAt ? ` (live rate, updated ${d.fx.updatedAt.slice(0, 10)})` : ""}
+            {d.fx.stale ? " — the rate service is unreachable, so the last saved rate is used" : ""}. Rewards and discount codes stay in {d.fx.from}.
           </>
         ) : (
           <>
-            Amounts are shown in your store currency, <s-text type="strong">{d.currency}</s-text>. {d.fx.error ? `${d.fx.error} ` : ""}
-            <s-link href="/app/settings">Show reports in another currency</s-link>
+            Amounts are shown in <s-text type="strong">{d.currency}</s-text>. {d.fx.error ? d.fx.error : ""}
           </>
         )}
       </s-banner>

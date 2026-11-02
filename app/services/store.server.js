@@ -36,7 +36,7 @@ async function loadShopInfo(admin) {
 
 // Re-read name/email/currency now and then, so a currency change in Shopify is picked up.
 const shopInfoCheckedAt = new Map();
-const SHOP_INFO_TTL = 6 * 3600 * 1000;
+const SHOP_INFO_TTL = 10 * 60 * 1000; // 10 minutes: a currency change in Shopify shows up quickly
 
 export async function ensureStore({ shop, scope }, admin) {
   let store = await prisma.store.findUnique({ where: { shop }, include: { settings: true } });

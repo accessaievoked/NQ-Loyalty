@@ -1,5 +1,6 @@
 import prisma from "../db.server.js";
 import { creditPoints } from "./credit.server.js";
+import { verifyRef } from "../lib/crypto.server.js";
 
 // Identity rules
 //  1. A loyalty account is keyed by (store, Shopify customer id). One per customer per store.
@@ -23,7 +24,7 @@ export function shapeCustomer(c) {
   };
 }
 
-export async function upsertCustomer(storeId, input) {
+export async function upsertCustomer(storeId, input, { bonus = true } = {}) {
   const c = input.shopifyCustomerId ? input : shapeCustomer(input);
   if (!c?.shopifyCustomerId) return null;
 
@@ -57,11 +58,13 @@ export async function upsertCustomer(storeId, input) {
   let email = data.email;
   if (email) {
     const byEmail = await prisma.customer.findUnique({ where: { storeId_email: { storeId, email } } });
-    if (byEmail && !byEmail.shopifyCustomerId && byEmail.emailVerified) {
+    // Either side can vouch for the address: the login code (existing account) or Shopify (incoming customer).
+    if (byEmail && !byEmail.shopifyCustomerId && (byEmail.emailVerified || data.emailVerified)) {
       return prisma.customer.update({
         where: { id: byEmail.id },
         data: {
           shopifyCustomerId: toStr(c.shopifyCustomerId),
+          emailVerified: true,
           phone: data.phone ?? byEmail.phone,
           firstName: data.firstName ?? byEmail.firstName,
           lastName: data.lastName ?? byEmail.lastName,
@@ -80,7 +83,7 @@ export async function upsertCustomer(storeId, input) {
     if (e?.code === "P2002") return prisma.customer.findUnique({ where });
     throw e;
   }
-  await grantSignupBonus(customer);
+  if (bonus) await grantSignupBonus(customer);
   return customer;
 }
 
@@ -99,8 +102,26 @@ export async function grantSignupBonus(customer) {
   });
 }
 
-/** Find an account for an order: by Shopify id first, then verified email for guests. */
+/**
+ * Which loyalty account does an order's points go to?
+ *  1. A shopper with a store account (customer.state "enabled", i.e. signed in / registered)
+ *     → the account for THEIR email, whatever happened to be open in the widget.
+ *  2. A guest checkout where a loyalty account was open in the widget (the storefront put a
+ *     signed `loyalty_ref` on the cart) → that open account.
+ *  3. Otherwise Shopify's own customer record for the order, then a verified-email match.
+ */
 export async function resolveOrderCustomer(storeId, order) {
+  if (order.customer?.id && order.customer.state === "enabled") {
+    return upsertCustomer(storeId, shapeCustomer(order.customer));
+  }
+
+  const ref = (order.note_attributes || []).find((a) => a?.name === "loyalty_ref")?.value;
+  const refId = ref ? verifyRef(storeId, ref) : null;
+  if (refId) {
+    const open = await prisma.customer.findFirst({ where: { id: refId, storeId } });
+    if (open) return open;
+  }
+
   if (order.customer?.id) {
     return upsertCustomer(storeId, shapeCustomer(order.customer));
   }

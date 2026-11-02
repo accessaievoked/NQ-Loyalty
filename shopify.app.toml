@@ -8,8 +8,8 @@ embedded = true
 [access_scopes]
 # read_customers / read_orders: identify shoppers and award points on orders
 # write_discounts: create the discount codes shoppers get when they redeem points
-# read_products: product mirror; read_fulfillments: delivery confirmation events
-scopes = "read_customers,read_orders,read_products,write_discounts,read_fulfillments"
+# read_products: product mirror; read_fulfillments: delivery status; read_returns: return status
+scopes = "read_customers,read_orders,read_products,write_discounts,read_fulfillments,read_returns"
 
 [webhooks]
 api_version = "2026-07"
@@ -30,6 +30,14 @@ api_version = "2026-07"
     "orders/cancelled",
     "refunds/create",
     "fulfillment_events/create",
+    "fulfillments/create",
+    "fulfillments/update",
+    "returns/request",
+    "returns/approve",
+    "returns/decline",
+    "returns/cancel",
+    "returns/close",
+    "returns/reopen",
     "customers/create",
     "customers/update",
     "products/update",
@@ -50,5 +58,4 @@ prefix = "apps"
 redirect_urls = [ "https://example.com/api/auth" ]
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = true

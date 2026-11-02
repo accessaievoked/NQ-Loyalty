@@ -1,0 +1,20 @@
+api_version = "2026-07"
+
+# A rewards card for the customer account Profile and Orders pages.
+# Add it in: Settings → Customer accounts → Customize → select a page → Add block → Loyalty rewards.
+[[extensions]]
+name = "Loyalty rewards"
+handle = "rewards-profile-block"
+uid = "7d7c7610-d5cc-68a9-06bd-aa0f827cd7187339b2d6"
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/RewardsBlock.jsx"
+  target = "customer-account.profile.block.render"
+
+  [[extensions.targeting]]
+  module = "./src/RewardsBlock.jsx"
+  target = "customer-account.order-index.block.render"
+
+  [extensions.capabilities]
+  network_access = true

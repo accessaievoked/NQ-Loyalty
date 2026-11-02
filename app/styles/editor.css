@@ -71,6 +71,12 @@
 .ed-mailframe iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
 .ed-vars { margin-top: 6px; }
 .ed-side-wide { width: 460px; }
+.ed-tpl-wrap { display: flex; flex-direction: column; gap: 4px; }
+.ed-tpl-card { display: flex; flex-direction: column; gap: 5px; padding: 0 0 8px; overflow: hidden; width: 100%; }
+.ed-linkbtn { border: 0; background: none; padding: 0; color: var(--ed-focus); font-size: 11px; text-align: left; cursor: pointer; text-decoration: underline; }
+.ed-status { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ed-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: #c9c9c9; }
+.ed-dot.ok { background: #16a34a; } .ed-dot.bad { background: #dc2626; }
 .ed-code-xl { min-height: 340px; height: 46vh; resize: vertical; white-space: pre; overflow: auto; }
 .ed-note-error { background: #fff0f0; border-color: #f3b8b8; color: #7a1313; }
 .ed-note-error ul { margin: 6px 0 0; padding-left: 18px; }
@@ -199,3 +205,12 @@ textarea.ed-input { resize: vertical; }
   .ed-side { width: 100%; height: 46%; border-right: 0; border-bottom: 1px solid var(--ed-line); }
   .ed-top-center { display: none; }
 }
+
+/* ---- sliders with an exact value box ---- */
+.ed-slider { display: flex; align-items: center; gap: 10px; }
+.ed-slider .ed-range { flex: 1; min-width: 0; }
+.ed-num { display: inline-flex; align-items: center; gap: 4px; flex: none; border: 1px solid var(--ed-line); border-radius: 8px; padding: 0 8px; background: #fff; height: 30px; }
+.ed-num:focus-within { border-color: var(--ed-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ed-accent) 20%, transparent); }
+.ed-num input { width: 44px; border: 0; outline: 0; background: transparent; font: inherit; text-align: right; padding: 0; -moz-appearance: textfield; }
+.ed-num input::-webkit-outer-spin-button, .ed-num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ed-num span { color: var(--ed-muted); font-size: 12px; }

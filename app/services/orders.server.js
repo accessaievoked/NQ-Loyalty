@@ -43,18 +43,7 @@ export async function handleOrderEvent(store, topic, payload) {
   if (topic === "orders/fulfilled") stamps.fulfilledAt = at(payload.updated_at);
   if (topic === "orders/cancelled") stamps.cancelledAt = at(payload.cancelled_at);
 
-  // AWB numbers let a shipping integration (Shiprocket) find this order again.
-  const tracking = [
-    ...new Set(
-      (payload.fulfillments || [])
-        .flatMap((f) => [f.tracking_number, ...(f.tracking_numbers || [])])
-        .filter(Boolean)
-        .map(String),
-    ),
-  ];
-
   const base = {
-    ...(tracking.length ? { trackingNumbers: tracking } : {}),
     orderName: payload.name ?? null,
     email: (payload.email || payload.contact_email || "").toLowerCase() || null,
     currency: payload.currency ?? null,
@@ -82,16 +71,72 @@ export async function handleOrderEvent(store, topic, payload) {
   return evaluateOrder(store, order);
 }
 
+// Delivery comes from Shopify itself, in two forms (either may fire, depending on the carrier):
+//   fulfillment_events/create  { order_id, status: "delivered", happened_at }
+//   fulfillments/create|update { order_id, shipment_status: "delivered", updated_at }
+// The FIRST delivery time is kept, so repeated pings never push the return window out.
+async function markDelivered(store, shopifyOrderId, when, shipmentStatus) {
+  const where = { storeId_shopifyOrderId: { storeId: store.id, shopifyOrderId } };
+  const existing = await prisma.order.findUnique({ where });
+  const deliveredAt = existing?.deliveredAt ?? when;
+  const order = await prisma.order.upsert({
+    where,
+    create: { storeId: store.id, shopifyOrderId, deliveredAt, shipmentStatus },
+    update: { deliveredAt, shipmentStatus },
+  });
+  return evaluateOrder(store, order);
+}
+
 /** fulfillment_events/create — only "delivered" matters. */
 export async function handleFulfillmentEvent(store, payload) {
   if (String(payload.status).toLowerCase() !== "delivered") return;
-  const shopifyOrderId = String(payload.order_id);
+  return markDelivered(store, String(payload.order_id), new Date(payload.happened_at || Date.now()), "delivered");
+}
+
+/** fulfillments/create and fulfillments/update — shipment_status reports the carrier's progress. */
+export async function handleFulfillmentUpdate(store, payload) {
+  const status = String(payload.shipment_status ?? "").toLowerCase();
+  if (!payload.order_id) return;
+  if (status !== "delivered") {
+    if (status) {
+      await prisma.order.updateMany({
+        where: { storeId: store.id, shopifyOrderId: String(payload.order_id) },
+        data: { shipmentStatus: status.slice(0, 40) },
+      });
+    }
+    return;
+  }
+  return markDelivered(store, String(payload.order_id), new Date(payload.updated_at || Date.now()), "delivered");
+}
+
+// Returns, straight from Shopify:
+//   REQUESTED / OPEN  → a return is in progress: points still waiting are HELD (not credited);
+//   CLOSED            → the item came back: the order's points are cancelled, or taken back
+//                       if they were already credited, and never credited again;
+//   DECLINED/CANCELED → the return didn't happen: normal crediting resumes.
+export const RETURN_ON_HOLD = ["REQUESTED", "OPEN"];
+
+/** `status` is Shopify's ReturnStatus; `shopifyOrderId` is the numeric order id. */
+export async function handleReturnStatus(store, shopifyOrderId, status) {
+  const normalised = String(status).toUpperCase();
+  const where = { storeId_shopifyOrderId: { storeId: store.id, shopifyOrderId: String(shopifyOrderId) } };
   const order = await prisma.order.upsert({
-    where: { storeId_shopifyOrderId: { storeId: store.id, shopifyOrderId } },
-    create: { storeId: store.id, shopifyOrderId, deliveredAt: new Date(payload.happened_at || Date.now()) },
-    update: { deliveredAt: new Date(payload.happened_at || Date.now()) },
+    where,
+    create: { storeId: store.id, shopifyOrderId: String(shopifyOrderId), returnStatus: normalised },
+    update: { returnStatus: normalised, ...(normalised === "CLOSED" ? { returnedAt: new Date() } : {}) },
   });
-  return evaluateOrder(store, order);
+
+  if (normalised === "CLOSED") {
+    await cancelOrderPoints(store, order, "Returned");
+    return "returned: points cancelled";
+  }
+  if (normalised === "DECLINED" || normalised === "CANCELED") {
+    // The hold is over: credit now if the waiting period has already passed.
+    const award = await prisma.pointsAward.findUnique({ where: { orderId: order.id } });
+    if (award?.status === "PENDING") await releaseAward(award.id);
+    return "return ended: points resume";
+  }
+  return "return in progress: points held";
 }
 
 /** refunds/create */
@@ -184,7 +229,7 @@ async function markRedemptionsUsed(storeId, order) {
 
 /** Create the award once the configured status has been reached. Idempotent per order. */
 export async function evaluateOrder(store, order) {
-  if (order.cancelledAt || order.returnedAt || !order.customerId) return null;
+  if (order.cancelledAt || order.returnedAt || order.returnStatus === "CLOSED" || !order.customerId) return null;
   const settings = store.settings ?? (await prisma.storeSettings.findUnique({ where: { storeId: store.id } }));
   if (!settings) return null;
 
@@ -221,6 +266,16 @@ export async function evaluateOrder(store, order) {
 
 /** Credit a pending award to the ledger. Safe to call repeatedly and concurrently. */
 export async function releaseAward(awardId) {
+  // Shopify's return status decides first: a return in progress HOLDS the points (they stay
+  // pending and are looked at again later); a completed return cancels them for good.
+  const pre = await prisma.pointsAward.findUnique({ where: { id: awardId }, include: { order: true } });
+  if (!pre || pre.status !== "PENDING") return null;
+  if (pre.order.returnedAt || pre.order.returnStatus === "CLOSED") {
+    await prisma.pointsAward.updateMany({ where: { id: awardId, status: "PENDING" }, data: { status: "CANCELLED" } });
+    return null;
+  }
+  if (RETURN_ON_HOLD.includes(pre.order.returnStatus)) return null;
+
   const claimed = await prisma.pointsAward.updateMany({
     where: { id: awardId, status: "PENDING", releaseAt: { lte: new Date(Date.now() + 1000) } },
     data: { status: "RELEASED", releasedAt: new Date() },

@@ -7,6 +7,7 @@ import { creditPoints } from "../services/credit.server";
 import { convert, getFx } from "../services/currency.server";
 import { customerReferralStats } from "../services/referralstats.server";
 import db from "../db.server";
+import BackButton from "../components/BackButton";
 
 export const loader = async ({ request, params }) => {
   const { store } = await requireStore(request);
@@ -111,7 +112,8 @@ export default function CustomerDetail() {
   }, [fetcher.data, shopify]);
 
   return (
-    <s-page heading={customer.name} backAction="/app/customers">
+    <s-page heading={customer.name}>
+      <BackButton href="/app/customers" label="Back to customers" />
       <s-section heading="Balance">
         <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base">
           <s-box padding="base" border="base" borderRadius="base" background="subdued">
@@ -124,7 +126,7 @@ export default function CustomerDetail() {
           </s-box>
           <s-box padding="base" border="base" borderRadius="base" background="subdued">
             <s-text color="subdued">Email</s-text>
-            <s-text>{customer.email || "—"}</s-text>
+            <s-heading>{customer.email || "—"}</s-heading>
           </s-box>
         </s-grid>
       </s-section>

@@ -2,33 +2,58 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { requireStore } from "../services/auth.server";
-import {
-  isKind,
-  listEmailTemplates,
-  resetEmailTemplate,
-  saveEmailTemplate,
-} from "../services/emailtemplates.server";
+import { isKind, listEmailTemplates, resetEmailTemplate, saveEmailTemplate } from "../services/emailtemplates.server";
 import { sendTemplateTest, smtpConfigured } from "../services/mailer.server";
-import { normalizeEmailTemplate } from "../lib/email/templates";
+import { getRedis } from "../queue/queue.server";
+import db from "../db.server";
 import {
   EMAIL_BLOCK_TYPES,
   EMAIL_KINDS,
-  FONT_STACKS,
+  EMAIL_PRESETS,
+  EMAIL_STYLE_FIELDS,
+  FONT_LABELS,
   blocksToHtml,
+  buildPreset,
   defaultEmailTemplate,
   makeEmailBlock,
+  normalizeEmailTemplate,
   renderEmail,
 } from "../lib/email/templates";
-import { BlockField, ColorField, Row, SelectField, RangeField } from "../components/EditorControls";
+import { BlockField, ColorField, OptionalColorField, OptionalRangeField, RangeField, Row, SelectField, StyleField, Toggle } from "../components/EditorControls";
+import { ArrowLeft } from "../components/BackButton";
 import "../styles/editor.css";
 
+// One page for everything email: how each message looks (blocks or your own HTML), and when
+// and from whom they are sent.
+
+async function redisUp() {
+  try {
+    const pong = await Promise.race([getRedis().ping(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1500))]);
+    return pong === "PONG";
+  } catch {
+    return false;
+  }
+}
+
 export const loader = async ({ request }) => {
-  const { store } = await requireStore(request);
+  const { store, session } = await requireStore(request);
+  const s = store.settings;
   return {
     shop: store.name || store.shop,
-    storeEmail: store.email || "",
+    storeEmail: store.email || session.email || "",
     smtp: smtpConfigured(),
+    redis: await redisUp(),
     templates: await listEmailTemplates(store.id),
+    settings: {
+      emailsEnabled: s.emailsEnabled,
+      notifyPointsEarned: s.notifyPointsEarned,
+      notifyRedeemed: s.notifyRedeemed,
+      notifyExpiring: s.notifyExpiring,
+      expiryReminderDays: s.expiryReminderDays,
+      senderName: s.senderName || "",
+      replyTo: s.replyTo || "",
+      expiryDays: s.expiryDays,
+    },
   };
 };
 
@@ -36,6 +61,24 @@ export const action = async ({ request }) => {
   const { store } = await requireStore(request);
   const f = await request.formData();
   const intent = String(f.get("intent"));
+
+  if (intent === "settings") {
+    const on = (k) => f.get(k) === "on";
+    await db.storeSettings.update({
+      where: { storeId: store.id },
+      data: {
+        emailsEnabled: on("emailsEnabled"),
+        notifyPointsEarned: on("notifyPointsEarned"),
+        notifyRedeemed: on("notifyRedeemed"),
+        notifyExpiring: on("notifyExpiring"),
+        expiryReminderDays: Math.max(1, Math.min(90, Math.floor(Number(f.get("expiryReminderDays"))) || 7)),
+        senderName: String(f.get("senderName") || "").trim().slice(0, 60) || null,
+        replyTo: String(f.get("replyTo") || "").trim().slice(0, 120) || null,
+      },
+    });
+    return { ok: true, intent, message: "Email settings saved" };
+  }
+
   const kind = String(f.get("kind"));
   if (!isKind(kind)) return { ok: false, errors: ["Unknown email"] };
 
@@ -67,6 +110,64 @@ export const action = async ({ request }) => {
   return { ok: false, errors: ["Unknown action"] };
 };
 
+// ---- settings panel ---------------------------------------------------------------------------------
+
+function EmailSettings({ settings, smtp, redis }) {
+  const fetcher = useFetcher();
+  const [s, setS] = useState(settings);
+  const set = (patch) => setS((x) => ({ ...x, ...patch }));
+  const dirty = JSON.stringify(s) !== JSON.stringify(settings);
+  const save = () => {
+    const fd = new FormData();
+    fd.set("intent", "settings");
+    for (const k of ["emailsEnabled", "notifyPointsEarned", "notifyRedeemed", "notifyExpiring"]) if (s[k]) fd.set(k, "on");
+    fd.set("expiryReminderDays", String(s.expiryReminderDays));
+    fd.set("senderName", s.senderName);
+    fd.set("replyTo", s.replyTo);
+    fetcher.submit(fd, { method: "POST" });
+  };
+  const shopify = useAppBridge();
+  useEffect(() => {
+    if (fetcher.data?.ok) shopify.toast.show(fetcher.data.message);
+  }, [fetcher.data, shopify]);
+
+  return (
+    <div className="ed-pane-body">
+      <div className="ed-section-title">When emails are sent</div>
+      <Toggle label="Send loyalty emails" checked={s.emailsEnabled} onChange={(v) => set({ emailsEnabled: v })} />
+      <Toggle label="Points earned" checked={s.notifyPointsEarned} onChange={(v) => set({ notifyPointsEarned: v })} />
+      <Toggle label="Reward code issued" checked={s.notifyRedeemed} onChange={(v) => set({ notifyRedeemed: v })} />
+      <Toggle label="Points expiring soon" checked={s.notifyExpiring} onChange={(v) => set({ notifyExpiring: v })} />
+      <Row
+        label="Warn this many days before points expire"
+        help={s.expiryDays === 0 ? "Your points currently never expire (set an expiry on the Rules page), so no reminders go out." : "Customers get one reminder email per batch of expiring points."}
+      >
+        <input className="ed-input" type="number" min={1} max={90} value={s.expiryReminderDays} onChange={(e) => set({ expiryReminderDays: Number(e.target.value) })} />
+      </Row>
+      <div className="ed-section-title">Who it comes from</div>
+      <Row label="Sender name" help="Defaults to your store name.">
+        <input className="ed-input" value={s.senderName} onChange={(e) => set({ senderName: e.target.value })} placeholder="e.g. Claura Rewards" />
+      </Row>
+      <Row label="Reply-to address" help="Where customers' replies go.">
+        <input className="ed-input" type="email" value={s.replyTo} onChange={(e) => set({ replyTo: e.target.value })} />
+      </Row>
+      <button type="button" className="ed-btn primary wide" disabled={!dirty || fetcher.state !== "idle"} onClick={save}>
+        {fetcher.state !== "idle" ? "Saving…" : "Save settings"}
+      </button>
+
+      <div className="ed-divider" />
+      <div className="ed-section-title">System status</div>
+      <ul className="ed-status">
+        <li><span className={`ed-dot ${smtp ? "ok" : "bad"}`} /> Email sending (SMTP): <strong>{smtp ? "connected" : "not set up on the server"}</strong></li>
+        <li><span className={`ed-dot ${redis ? "ok" : "bad"}`} /> Background jobs (Redis): <strong>{redis ? "connected" : "offline"}</strong></li>
+      </ul>
+      {!redis && <p className="ed-help">Delayed point release and reminder emails need Redis and the worker: run <code>npm run redis</code> and <code>npm run worker</code>.</p>}
+    </div>
+  );
+}
+
+// ---- the page --------------------------------------------------------------------------------------
+
 export default function Emails() {
   const data = useLoaderData();
   const fetcher = useFetcher();
@@ -75,6 +176,7 @@ export default function Emails() {
   const [drafts, setDrafts] = useState(() => Object.fromEntries(data.templates.map((t) => [t.kind, t.template])));
   const [saved, setSaved] = useState(() => Object.fromEntries(data.templates.map((t) => [t.kind, JSON.stringify(t.template)])));
   const [custom, setCustom] = useState(() => Object.fromEntries(data.templates.map((t) => [t.kind, t.customised])));
+  const [section, setSection] = useState("emails"); // emails | settings
   const [kind, setKind] = useState("points_earned");
   const [tab, setTab] = useState("blocks"); // blocks | design | html
   const [selectedId, setSelectedId] = useState(null);
@@ -93,12 +195,18 @@ export default function Emails() {
   const update = (fn) => setDrafts((d) => ({ ...d, [kind]: fn(d[kind]) }));
   const setTheme = (patch) => update((t) => ({ ...t, theme: { ...t.theme, ...patch } }));
   const setBlock = (id, fn) => update((t) => ({ ...t, blocks: t.blocks.map((b) => (b.id === id ? fn(b) : b)) }));
+  const setStyle = (id, k, v) =>
+    setBlock(id, (b) => {
+      const style = { ...(b.style || {}) };
+      if (v === "" || v === undefined || v === null || v === false) delete style[k];
+      else style[k] = v;
+      return { ...b, style };
+    });
   const selected = draft.blocks.find((b) => b.id === selectedId) || null;
 
-  // React to the server's answer to save / reset / test
   useEffect(() => {
     const d = fetcher.data;
-    if (!d) return;
+    if (!d || d.intent === "settings") return;
     if (d.ok) {
       shopify.toast.show(d.message || "Done");
       if (d.intent === "save") {
@@ -152,6 +260,15 @@ export default function Emails() {
       return { ...t, blocks };
     });
   };
+  const applyPreset = (id, everywhere) => {
+    if (!window.confirm(everywhere ? "Restyle all four emails with this design? Their wording is reset to the defaults." : "Restyle this email with this design? Its blocks are rebuilt with the default wording.")) return;
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const k of everywhere ? Object.keys(EMAIL_KINDS) : [kind]) next[k] = { ...buildPreset(k, id), subject: d[k].subject };
+      return next;
+    });
+    setSelectedId(null);
+  };
   const insertVar = (name) => {
     const text = `{{${name}}}`;
     if (tab === "html" && htmlRef.current) {
@@ -170,7 +287,7 @@ export default function Emails() {
   const varOptions = { "": "Always", ...Object.fromEntries(info.vars.map(([k]) => [k, `Only when ${k} has a value`])) };
   const def = selected ? EMAIL_BLOCK_TYPES[selected.type] : null;
 
-  const VarList = () => (
+  const varList = (
     <div className="ed-vars">
       <div className="ed-section-title">Variables for this email</div>
       <ul className="ed-ref-list">
@@ -191,42 +308,53 @@ export default function Emails() {
     <div className="ed">
       <header className="ed-top">
         <div className="ed-top-left">
-          <Link to="/app/settings" className="ed-back" aria-label="Back">←</Link>
+          <Link to="/app" replace className="ed-back" aria-label="Back to home"><ArrowLeft /></Link>
           <div>
-            <div className="ed-title">Email templates</div>
-            <div className="ed-sub">{dirty ? "Unsaved changes" : custom[kind] ? "Customised" : "Using the default"}</div>
+            <div className="ed-title">Emails</div>
+            <div className="ed-sub">{section === "settings" ? "Sending settings" : dirty ? "Unsaved changes" : custom[kind] ? "Customised" : "Using the default"}</div>
           </div>
         </div>
         <div className="ed-top-center">
           <div className="ed-seg" role="group" aria-label="Email">
             {Object.entries(EMAIL_KINDS).map(([k, v]) => (
-              <button key={k} type="button" className={kind === k ? "on" : ""} onClick={() => { setKind(k); setSelectedId(null); }}>
+              <button key={k} type="button" className={section === "emails" && kind === k ? "on" : ""} onClick={() => { setKind(k); setSection("emails"); setSelectedId(null); }}>
                 {v.label}
                 {JSON.stringify(drafts[k]) !== saved[k] ? " •" : ""}
               </button>
             ))}
+            <button type="button" className={section === "settings" ? "on" : ""} onClick={() => setSection("settings")}>Settings</button>
           </div>
-          <div className="ed-seg" role="group" aria-label="Device">
-            <button type="button" className={device === "desktop" ? "on" : ""} onClick={() => setDevice("desktop")}>Desktop</button>
-            <button type="button" className={device === "mobile" ? "on" : ""} onClick={() => setDevice("mobile")}>Mobile</button>
-          </div>
+          {section === "emails" && (
+            <div className="ed-seg" role="group" aria-label="Device">
+              <button type="button" className={device === "desktop" ? "on" : ""} onClick={() => setDevice("desktop")}>Desktop</button>
+              <button type="button" className={device === "mobile" ? "on" : ""} onClick={() => setDevice("mobile")}>Mobile</button>
+            </div>
+          )}
         </div>
         <div className="ed-top-right">
-          <button type="button" className="ed-btn" disabled={busy || !custom[kind]} onClick={() => window.confirm("Throw away your changes to this email and use the default?") && send("reset")}>
-            Reset to default
-          </button>
-          <button type="button" className="ed-btn primary" disabled={busy || !dirty} onClick={() => send("save")}>
-            {busy ? "Working…" : "Save"}
-          </button>
+          {section === "emails" && (
+            <>
+              <button type="button" className="ed-btn" disabled={busy || !custom[kind]} onClick={() => window.confirm("Throw away your changes to this email and use the default?") && send("reset")}>
+                Reset to default
+              </button>
+              <button type="button" className="ed-btn primary" disabled={busy || !dirty} onClick={() => send("save")}>
+                {busy ? "Working…" : "Save"}
+              </button>
+            </>
+          )}
         </div>
       </header>
 
       <div className="ed-main">
         <aside className="ed-side">
-          {selected ? (
+          {section === "settings" ? (
+            <div className="ed-pane">
+              <EmailSettings settings={data.settings} smtp={data.smtp} redis={data.redis} />
+            </div>
+          ) : selected ? (
             <div className="ed-pane">
               <div className="ed-pane-head">
-                <button type="button" className="ed-back" onClick={() => setSelectedId(null)} aria-label="Back to blocks">←</button>
+                <button type="button" className="ed-back" onClick={() => setSelectedId(null)} aria-label="Back to blocks"><ArrowLeft /></button>
                 <div>
                   <div className="ed-pane-title">{def.label}</div>
                   <div className="ed-sub">Block settings</div>
@@ -236,17 +364,30 @@ export default function Emails() {
                 {def.fields.map((f) => (
                   <BlockField key={f.key} def={f} value={selected.settings[f.key]} onChange={(v) => setBlock(selected.id, (b) => ({ ...b, settings: { ...b.settings, [f.key]: v } }))} />
                 ))}
-                <div className="ed-divider" />
                 <SelectField
                   label="Show this block"
                   value={selected.settings.onlyIf || ""}
                   options={varOptions}
                   onChange={(v) => setBlock(selected.id, (b) => ({ ...b, settings: { ...b.settings, onlyIf: v } }))}
                 />
+
+                <div className="ed-divider" />
+                <div className="ed-section-title">Style</div>
+                <p className="ed-help">Colours, size, spacing and borders for just this block. Anything left on default follows the email's design.</p>
+                {EMAIL_STYLE_FIELDS.map((f) => (
+                  <StyleField key={f.key} def={f} value={selected.style?.[f.key]} onChange={(v) => setStyle(selected.id, f.key, v)} />
+                ))}
+                {selected.style && Object.keys(selected.style).length > 0 && (
+                  <button type="button" className="ed-btn wide" onClick={() => setBlock(selected.id, (b) => ({ ...b, style: {} }))}>
+                    Reset this block's style
+                  </button>
+                )}
+
+                <div className="ed-divider" />
                 <button type="button" className="ed-btn danger wide" onClick={() => { update((t) => ({ ...t, blocks: t.blocks.filter((b) => b.id !== selected.id) })); setSelectedId(null); }}>
                   Remove block
                 </button>
-                <VarList />
+                {varList}
               </div>
             </div>
           ) : (
@@ -304,7 +445,7 @@ export default function Emails() {
                             <span className="ed-grip" aria-hidden>⋮⋮</span>
                             <button type="button" className="ed-block-main" onClick={() => setSelectedId(b.id)}>
                               <span className="ed-block-icon">{d.icon}</span>
-                              <span className="ed-block-name">{b.settings.text || b.settings.label || d.label}</span>
+                              <span className="ed-block-name">{b.settings.text || b.settings.label || b.settings.items || d.label}</span>
                               <span className="ed-block-type">{d.label}{b.settings.onlyIf ? " · conditional" : ""}</span>
                             </button>
                           </li>
@@ -323,24 +464,48 @@ export default function Emails() {
                         </div>
                       )}
                     </div>
-                    <p className="ed-help">Drag to reorder. Click a block to edit it.</p>
-                    <VarList />
+                    <p className="ed-help">Drag to reorder, click a block to change its text and style.</p>
+                    {varList}
                   </>
                 )}
 
                 {tab === "design" && (
                   <>
+                    <div className="ed-section-title">Ready-made designs</div>
+                    <div className="ed-tpls">
+                      {Object.entries(EMAIL_PRESETS).map(([id, p]) => (
+                        <div key={id} className="ed-tpl-wrap">
+                          <button type="button" className="ed-tpl" onClick={() => applyPreset(id, false)} title={p.note}>
+                            <span className="ed-tpl-art" style={{ background: p.theme.background, borderRadius: 10, borderColor: p.theme.cardBorder || "#e5e7eb", padding: 6, justifyContent: "flex-start" }}>
+                              <span className="ed-tpl-card" style={{ background: p.theme.card, borderRadius: Math.min(p.theme.radius, 10) }}>
+                                <span className="ed-tpl-head" style={{ background: p.styles.brand?.bg || p.theme.card }} />
+                                <span className="ed-tpl-line" style={{ background: p.theme.heading, width: "55%", height: 5, border: 0 }} />
+                                <span className="ed-tpl-btn" style={{ background: p.theme.brand, borderRadius: p.styles.button?.radius > 20 ? 99 : Math.min(p.styles.button?.radius ?? 8, 8) }} />
+                              </span>
+                            </span>
+                            <span className="ed-tpl-name">{p.label}</span>
+                          </button>
+                          <button type="button" className="ed-linkbtn" onClick={() => applyPreset(id, true)}>Use for all emails</button>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="ed-help">Picking a design rebuilds this email with its default wording in that style. Everything can still be changed block by block.</p>
+
                     <div className="ed-section-title">Colours</div>
-                    <ColorField label="Brand (buttons)" value={draft.theme.brand} onChange={(v) => setTheme({ brand: v })} />
+                    <ColorField label="Brand (buttons, links)" value={draft.theme.brand} onChange={(v) => setTheme({ brand: v })} />
                     <ColorField label="Headings" value={draft.theme.heading} onChange={(v) => setTheme({ heading: v })} />
                     <ColorField label="Text" value={draft.theme.text} onChange={(v) => setTheme({ text: v })} />
                     <ColorField label="Muted text" value={draft.theme.muted} onChange={(v) => setTheme({ muted: v })} />
                     <ColorField label="Page background" value={draft.theme.background} onChange={(v) => setTheme({ background: v })} />
                     <ColorField label="Card background" value={draft.theme.card} onChange={(v) => setTheme({ card: v })} />
+                    <OptionalColorField label="Card border" value={draft.theme.cardBorder} onChange={(v) => setTheme({ cardBorder: v })} />
                     <div className="ed-section-title">Shape &amp; type</div>
-                    <RangeField label="Corner radius" value={draft.theme.radius} min={0} max={32} onChange={(v) => setTheme({ radius: v })} />
-                    <RangeField label="Width" value={draft.theme.width} min={360} max={700} onChange={(v) => setTheme({ width: v })} />
-                    <SelectField label="Font" value={draft.theme.font} options={{ system: "Sans-serif", serif: "Serif", mono: "Monospace" }} onChange={(v) => setTheme({ font: FONT_STACKS[v] ? v : "system" })} />
+                    <RangeField label="Corner radius" value={draft.theme.radius} min={0} max={48} onChange={(v) => setTheme({ radius: v })} />
+                    <RangeField label="Card width" value={draft.theme.width} min={360} max={700} onChange={(v) => setTheme({ width: v })} />
+                    <RangeField label="Space around the card" value={draft.theme.pagePad} min={0} max={80} onChange={(v) => setTheme({ pagePad: v })} />
+                    <RangeField label="Side spacing (all rows)" value={draft.theme.padX} min={0} max={100} onChange={(v) => setTheme({ padX: v })} />
+                    <OptionalRangeField label="Space above & below every row" value={draft.theme.rowGap} min={0} max={80} onChange={(v) => setTheme({ rowGap: v })} />
+                    <SelectField label="Font" value={draft.theme.font} options={FONT_LABELS} onChange={(v) => setTheme({ font: v })} />
                   </>
                 )}
 
@@ -362,7 +527,7 @@ export default function Emails() {
                     ) : (
                       <p className="ed-help">Switch to Custom HTML to write the whole email yourself. It starts from your current blocks, so you keep the look.</p>
                     )}
-                    <VarList />
+                    {varList}
                   </>
                 )}
 
@@ -378,10 +543,22 @@ export default function Emails() {
         </aside>
 
         <main className="ed-stage ed-stage-col">
-          <div className="ed-subject"><span>Subject</span><strong>{preview.subject}</strong></div>
-          <div className={`ed-mailframe ${device === "mobile" ? "mobile" : ""}`}>
-            <iframe title="Email preview" sandbox="" srcDoc={preview.html} />
-          </div>
+          {section === "settings" ? (
+            <div className="ed-note" style={{ maxWidth: 560 }}>
+              <strong>Emails are sent for you</strong>
+              <span>
+                Points earned, reward codes and expiry reminders go out automatically from your own mailbox settings. Pick any email in the bar above to
+                change how it looks, and send yourself a test.
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="ed-subject"><span>Subject</span><strong>{preview.subject}</strong></div>
+              <div className={`ed-mailframe ${device === "mobile" ? "mobile" : ""}`}>
+                <iframe title="Email preview" sandbox="" srcDoc={preview.html} />
+              </div>
+            </>
+          )}
         </main>
       </div>
     </div>

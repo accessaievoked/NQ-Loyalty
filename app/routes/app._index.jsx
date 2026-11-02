@@ -48,18 +48,40 @@ export const loader = async ({ request }) => {
 };
 
 const nameOf = (c) => [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email || "Unknown";
-const fmt = (n) => new Intl.NumberFormat("en").format(n);
+const fmt = (n) => new Intl.NumberFormat("en-IN").format(n);
 
 function Stat({ label, value }) {
   return (
-    <s-box padding="base" border="base" borderRadius="base" background="subdued">
+    <s-box padding="base" border="base" borderRadius="large" background="base">
       <s-stack gap="small-300">
         <s-text color="subdued">{label}</s-text>
-        <s-heading>{fmt(value)}</s-heading>
+        <s-heading size="large">{fmt(value)}</s-heading>
       </s-stack>
     </s-box>
   );
 }
+
+// const SHORTCUTS = [
+//   { href: "/app/rules", icon: "target", title: "Rules & rewards", text: "How customers earn and what they can spend points on" },
+//   { href: "/app/customers", icon: "person", title: "Customers", text: "Balances, referrals, and importing existing members" },
+//   { href: "/app/appearance", icon: "color", title: "Storefront widget", text: "Design what shoppers see, with a live editor" },
+//   { href: "/app/emails", icon: "email", title: "Emails", text: "15 designs, every block and spacing editable" },
+//   { href: "/app/analytics", icon: "chart-vertical", title: "Analytics", text: "Points, redemptions and referral revenue over time" },
+// ];
+
+// function Shortcut({ href, icon, title, text }) {
+//   return (
+//     <s-clickable href={href} border="base" borderRadius="large" padding="base" background="base">
+//       <s-stack direction="inline" gap="base" alignItems="start">
+//         <s-icon type={icon} />
+//         <s-stack gap="small-500">
+//           <s-text type="strong">{title}</s-text>
+//           <s-text color="subdued">{text}</s-text>
+//         </s-stack>
+//       </s-stack>
+//     </s-clickable>
+//   );
+// }
 
 export default function Home() {
   const { stats, top, recent, checklist, shop, apiKey, mode } = useLoaderData();
@@ -71,19 +93,27 @@ export default function Home() {
         Customise storefront
       </s-button>
 
+      {/* <s-section heading="Jump to">
+        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(240px, 1fr))" gap="base">
+          {SHORTCUTS.map((x) => (
+            <Shortcut key={x.href} {...x} />
+          ))}
+        </s-grid>
+      </s-section> */}
+
       <s-section heading="Get started">
         <s-stack gap="base">
           <s-stack direction="inline" gap="small" alignItems="center">
             <s-badge tone={checklist.rules ? "success" : "warning"}>{checklist.rules ? "Done" : "To do"}</s-badge>
             <s-text>
               Set how customers earn points and when they're credited.{" "}
-              <s-link href="/app/rules">Earning rules</s-link>
+              <s-link href="/app/rules">Rules</s-link>
             </s-text>
           </s-stack>
           <s-stack direction="inline" gap="small" alignItems="center">
             <s-badge tone={checklist.rewards ? "success" : "warning"}>{checklist.rewards ? "Done" : "To do"}</s-badge>
             <s-text>
-              Create rewards customers can redeem. <s-link href="/app/rewards">Rewards</s-link>
+              Create rewards customers can redeem, in the same place. <s-link href="/app/rules">Rules</s-link>
             </s-text>
           </s-stack>
           <s-stack direction="inline" gap="small" alignItems="center">

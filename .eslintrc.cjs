@@ -18,6 +18,7 @@ module.exports = {
     browser: true,
     commonjs: true,
     es6: true,
+    es2020: true,
   },
   ignorePatterns: ["!**/.server", "!**/.client"],
 

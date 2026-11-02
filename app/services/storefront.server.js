@@ -3,6 +3,7 @@ import { getWidgetConfig } from "./store.server.js";
 import { shapeCustomer, upsertCustomer } from "./customers.server.js";
 import { claimAndEvaluate } from "./orders.server.js";
 import { referralInfo } from "./referrals.server.js";
+import { signRef } from "../lib/crypto.server.js";
 
 const CUSTOMER_QUERY = `#graphql
   query LoyaltyCustomer($id: ID!) {
@@ -179,6 +180,8 @@ export async function buildStorefrontState({ store, customer, via }) {
       shop: { name: store.name || store.shop, currency },
       loggedIn: !!customer,
       via: customer ? via : null,
+      // Only for email-code logins: lets a guest checkout credit THIS account (see resolveOrderCustomer).
+      checkoutRef: customer && via === "otp" ? signRef(store.id, customer.id) : null,
       customer: customer
         ? {
             firstName: customer.firstName,

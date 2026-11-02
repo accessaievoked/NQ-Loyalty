@@ -321,6 +321,43 @@ export function newBlockId() {
   return `b_${Date.now().toString(36)}${idCounter}${Math.random().toString(36).slice(2, 5)}`;
 }
 
+// Per-block look. Every value is optional: empty means "inherit the theme".
+export const BLOCK_STYLE_FIELDS = [
+  { key: "bg", label: "Background", type: "color" },
+  { key: "text", label: "Text colour", type: "color" },
+  { key: "accent", label: "Accent (buttons, numbers)", type: "color" },
+  { key: "cardBg", label: "Card colour", type: "color" },
+  { key: "border", label: "Border colour", type: "color" },
+  { key: "radius", label: "Corner radius", type: "range", min: 0, max: 40 },
+  { key: "pad", label: "Inner spacing", type: "range", min: 0, max: 40 },
+  { key: "padBottom", label: "Space below", type: "range", min: 0, max: 60 },
+  { key: "fontSize", label: "Text size", type: "range", min: 10, max: 28 },
+  { key: "weight", label: "Text weight", type: "select", options: { "": "Theme default", "400": "Regular", "500": "Medium", "600": "Semi-bold", "700": "Bold", "800": "Extra bold" } },
+  { key: "align", label: "Alignment", type: "select", options: { "": "Theme default", left: "Left", center: "Centre", right: "Right" } },
+  { key: "hideOn", label: "Hide on", type: "select", options: { "": "Show everywhere", mobile: "Phones", desktop: "Desktop" } },
+];
+
+const STYLE_COLORS = ["bg", "text", "accent", "cardBg", "border"];
+const STYLE_NUMBERS = { radius: [0, 40], pad: [0, 40], padBottom: [0, 60], fontSize: [10, 28] };
+
+export function normalizeStyle(s) {
+  const out = {};
+  if (!s || typeof s !== "object") return out;
+  for (const k of STYLE_COLORS) {
+    const v = typeof s[k] === "string" ? s[k].trim() : "";
+    if (/^#[0-9a-fA-F]{3,8}$/.test(v)) out[k] = v;
+  }
+  for (const [k, [lo, hi]] of Object.entries(STYLE_NUMBERS)) {
+    if (s[k] === "" || s[k] == null) continue;
+    const n = Number(s[k]);
+    if (Number.isFinite(n)) out[k] = Math.min(hi, Math.max(lo, n));
+  }
+  if (["400", "500", "600", "700", "800"].includes(String(s.weight))) out.weight = String(s.weight);
+  if (["left", "center", "right"].includes(s.align)) out.align = s.align;
+  if (["mobile", "desktop"].includes(s.hideOn)) out.hideOn = s.hideOn;
+  return out;
+}
+
 export function makeBlock(type, overrides = {}) {
   const def = BLOCK_TYPES[type];
   return {
@@ -328,6 +365,7 @@ export function makeBlock(type, overrides = {}) {
     type,
     visible: true,
     settings: { audience: def.audience, ...def.defaults, ...overrides },
+    style: {},
   };
 }
 
@@ -406,6 +444,8 @@ export function defaultWidgetConfig(template = "classic") {
     launcher: { ...DEFAULT_LAUNCHER },
     // mode "blocks": the block list below. mode "html": `html` is the whole layout.
     custom: { css: "", mode: "blocks", html: "" },
+    // The "My Rewards" tab added to the customer account page; opens the side drawer.
+    account: { tab: true, label: "My Rewards", icon: "🎁", selector: "", drawerWidth: 420 },
     // Developer source (full CSS / HTML shell). Stored separately in the database and merged in
     // by the server when enabled; never part of what the visual editor saves.
     dev: null,
@@ -487,7 +527,7 @@ export const BLOCK_DOCS = {
     what: "The customer's discount codes (active, used and expired).",
     classes: [
       [".lw-reward", "one code card"], [".lw-code", "the code text"], [".lw-badge", "Used / Expired pill"],
-      [".lw-btns", "Copy / Use at checkout buttons"], [".lw-dim", "used or expired card"],
+      [".lw-btns", "the Copy button"], [".lw-dim", "used or expired card"],
     ],
   },
   history: {
@@ -579,14 +619,24 @@ export function normalizeConfig(input) {
     seen.add(id);
     const settings = { audience: def.audience, ...def.defaults, ...(b.settings || {}) };
     if (!AUDIENCES[settings.audience]) settings.audience = def.audience;
-    blocks.push({ id, type: b.type, visible: b.visible !== false, settings });
+    blocks.push({ id, type: b.type, visible: b.visible !== false, settings, style: normalizeStyle(b.style) });
   }
+
+  const a = { ...base.account, ...(src.account || {}) };
+  const account = {
+    tab: a.tab !== false,
+    label: String(a.label ?? "My Rewards").slice(0, 40) || "My Rewards",
+    icon: String(a.icon ?? "🎁").slice(0, 8),
+    selector: String(a.selector ?? "").slice(0, 200),
+    drawerWidth: clamp(a.drawerWidth, 320, 560, 420),
+  };
 
   return {
     version: 1,
     template: TEMPLATES[src.template] ? src.template : "classic",
     theme,
     launcher,
+    account,
     custom: {
       css: String(src.custom?.css ?? "").slice(0, 20000),
       mode: src.custom?.mode === "html" ? "html" : "blocks",
