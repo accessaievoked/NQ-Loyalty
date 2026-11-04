@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { requireStore } from "../services/auth.server";
-import { isKind, listEmailTemplates, resetEmailTemplate, saveEmailTemplate } from "../services/emailtemplates.server";
+import { getEmailBrand, isKind, listEmailTemplates, resetEmailTemplate, saveEmailBrand, saveEmailTemplate } from "../services/emailtemplates.server";
 import { sendTemplateTest, smtpConfigured } from "../services/mailer.server";
 import { getRedis } from "../queue/queue.server";
 import db from "../db.server";
@@ -44,6 +44,7 @@ export const loader = async ({ request }) => {
     smtp: smtpConfigured(),
     redis: await redisUp(),
     templates: await listEmailTemplates(store.id),
+    brand: await getEmailBrand(store.id),
     settings: {
       emailsEnabled: s.emailsEnabled,
       notifyPointsEarned: s.notifyPointsEarned,
@@ -79,6 +80,17 @@ export const action = async ({ request }) => {
     return { ok: true, intent, message: "Email settings saved" };
   }
 
+  if (intent === "brand") {
+    let input;
+    try {
+      input = JSON.parse(String(f.get("brand") || "{}"));
+    } catch {
+      return { ok: false, intent, errors: ["Couldn't read the brand settings"] };
+    }
+    const brand = await saveEmailBrand(store.id, input);
+    return { ok: true, intent, brand, message: "Brand saved" };
+  }
+
   const kind = String(f.get("kind"));
   if (!isKind(kind)) return { ok: false, errors: ["Unknown email"] };
 
@@ -101,7 +113,7 @@ export const action = async ({ request }) => {
     const to = String(f.get("to") || "").trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return { ok: false, errors: ["Enter a valid email address"] };
     try {
-      await sendTemplateTest({ store, kind, template: normalizeEmailTemplate(kind, template), to });
+      await sendTemplateTest({ store, kind, template: normalizeEmailTemplate(kind, template, await getEmailBrand(store.id)), to });
       return { ok: true, intent, kind, message: `Test sent to ${to}` };
     } catch (e) {
       return { ok: false, errors: [`Couldn't send: ${e.message}`] };
@@ -109,6 +121,52 @@ export const action = async ({ request }) => {
   }
   return { ok: false, errors: ["Unknown action"] };
 };
+
+// ---- brand panel ------------------------------------------------------------------------------------
+
+function BrandSettings({ brand }) {
+  const fetcher = useFetcher();
+  const shopify = useAppBridge();
+  const [b, setB] = useState(brand);
+  const set = (patch) => setB((x) => ({ ...x, ...patch }));
+  const dirty = JSON.stringify(b) !== JSON.stringify(brand);
+  useEffect(() => {
+    if (fetcher.data?.intent === "brand" && fetcher.data.ok) shopify.toast.show(fetcher.data.message);
+  }, [fetcher.data, shopify]);
+  const save = () => {
+    const fd = new FormData();
+    fd.set("intent", "brand");
+    fd.set("brand", JSON.stringify(b));
+    fetcher.submit(fd, { method: "POST" });
+  };
+
+  return (
+    <div className="ed-pane-body">
+      <div className="ed-section-title">Your brand</div>
+      <p className="ed-help">Set your look once; every email you haven&apos;t customised uses it. Leave a field empty to keep the design&apos;s own.</p>
+      <Row label="Logo image link" help="A full https:// link, e.g. an image from Shopify → Content → Files.">
+        <input className="ed-input" value={b.logoUrl} onChange={(e) => set({ logoUrl: e.target.value })} placeholder="https://cdn.shopify.com/…/logo.png" />
+      </Row>
+      <Toggle label="Logo fills the whole header" checked={b.logoFull} onChange={(v) => set({ logoFull: v })} help="On: the image is the header, edge to edge (for a banner). Off: a small logo above the store name." />
+      <OptionalColorField label="Brand colour" value={b.brandColor} onChange={(v) => set({ brandColor: v })} />
+      <OptionalRangeField label="Corner radius" value={b.radius} min={0} max={48} onChange={(v) => set({ radius: v })} />
+      <OptionalColorField label="Header colour" value={b.headerColor} onChange={(v) => set({ headerColor: v })} />
+      <OptionalColorField label="Button colour" value={b.buttonColor} onChange={(v) => set({ buttonColor: v })} />
+      <OptionalColorField label="Footer colour" value={b.footerColor} onChange={(v) => set({ footerColor: v })} />
+      <Row label="Footer title">
+        <input className="ed-input" value={b.footerTitle} onChange={(e) => set({ footerTitle: e.target.value })} placeholder="Questions about your points?" />
+      </Row>
+      <Row label="Footer text" help="Use {email} for your contact address (your reply-to address below, or the store email).">
+        <textarea className="ed-input" rows={3} value={b.footerText} onChange={(e) => set({ footerText: e.target.value })} placeholder="Just reply to this email or reach us at {email}. We're happy to help." />
+      </Row>
+      <button type="button" className="ed-btn primary wide" disabled={!dirty || fetcher.state !== "idle"} onClick={save}>
+        {fetcher.state !== "idle" ? "Saving…" : "Save brand"}
+      </button>
+      <p className="ed-help">Emails you&apos;ve already customised keep their own design. To bring one in line, open it and use Design → pick a design, or Reset to the default.</p>
+      <div className="ed-divider" />
+    </div>
+  );
+}
 
 // ---- settings panel ---------------------------------------------------------------------------------
 
@@ -214,7 +272,7 @@ export default function Emails() {
         setCustom((c) => ({ ...c, [d.kind]: true }));
       }
       if (d.intent === "reset") {
-        const fresh = defaultEmailTemplate(d.kind);
+        const fresh = defaultEmailTemplate(d.kind, data.brand);
         setDrafts((x) => ({ ...x, [d.kind]: fresh }));
         setSaved((s) => ({ ...s, [d.kind]: JSON.stringify(fresh) }));
         setCustom((c) => ({ ...c, [d.kind]: false }));
@@ -236,6 +294,22 @@ export default function Emails() {
   };
 
   const preview = useMemo(() => renderEmail(kind, draft, info.sample), [kind, draft, info]);
+
+  // When the brand changes, emails still on the default (and not mid-edit) pick it up.
+  const brandKey = JSON.stringify(data.brand);
+  useEffect(() => {
+    setDrafts((d) => {
+      const next = { ...d };
+      for (const k of Object.keys(EMAIL_KINDS)) if (!custom[k] && JSON.stringify(d[k]) === saved[k]) next[k] = defaultEmailTemplate(k, data.brand);
+      return next;
+    });
+    setSaved((sv) => {
+      const next = { ...sv };
+      for (const k of Object.keys(EMAIL_KINDS)) if (!custom[k] && JSON.stringify(drafts[k]) === sv[k]) next[k] = JSON.stringify(defaultEmailTemplate(k, data.brand));
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandKey]);
 
   const addBlock = (type) => {
     const block = makeEmailBlock(type);
@@ -264,7 +338,7 @@ export default function Emails() {
     if (!window.confirm(everywhere ? "Restyle all four emails with this design? Their wording is reset to the defaults." : "Restyle this email with this design? Its blocks are rebuilt with the default wording.")) return;
     setDrafts((d) => {
       const next = { ...d };
-      for (const k of everywhere ? Object.keys(EMAIL_KINDS) : [kind]) next[k] = { ...buildPreset(k, id), subject: d[k].subject };
+      for (const k of everywhere ? Object.keys(EMAIL_KINDS) : [kind]) next[k] = { ...buildPreset(k, id, data.brand), subject: d[k].subject };
       return next;
     });
     setSelectedId(null);
@@ -308,7 +382,7 @@ export default function Emails() {
     <div className="ed">
       <header className="ed-top">
         <div className="ed-top-left">
-          <Link to="/app" replace className="ed-back" aria-label="Back to home"><ArrowLeft /></Link>
+          <Link to="/app/home" className="ed-back" aria-label="Back to home"><ArrowLeft /></Link>
           <div>
             <div className="ed-title">Emails</div>
             <div className="ed-sub">{section === "settings" ? "Sending settings" : dirty ? "Unsaved changes" : custom[kind] ? "Customised" : "Using the default"}</div>
@@ -349,6 +423,7 @@ export default function Emails() {
         <aside className="ed-side">
           {section === "settings" ? (
             <div className="ed-pane">
+              <BrandSettings brand={data.brand} />
               <EmailSettings settings={data.settings} smtp={data.smtp} redis={data.redis} />
             </div>
           ) : selected ? (

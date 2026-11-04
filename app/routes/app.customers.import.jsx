@@ -3,7 +3,6 @@ import { Form, useActionData, useNavigation } from "react-router";
 import { requireStore } from "../services/auth.server";
 import { importCustomers, importShopifyCustomers } from "../services/import.server";
 import { MAX_ROWS } from "../lib/import-limits";
-import BackButton from "../components/BackButton";
 
 export const loader = async ({ request }) => {
   await requireStore(request);
@@ -88,7 +87,6 @@ export default function ImportCustomers() {
 
   return (
     <s-page heading="Import customers" inlineSize="small">
-      <BackButton href="/app/customers" label="Back to customers" />
       <style>{`.link-button{background:none;border:0;padding:0;color:#005bd3;text-decoration:underline;cursor:pointer;font:inherit}
         .csv-box{width:100%;box-sizing:border-box;min-height:150px;padding:10px 12px;border:1px solid #c9cccf;border-radius:10px;font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;resize:vertical}
         .csv-pick{display:flex;align-items:center;gap:12px;flex-wrap:wrap}`}</style>

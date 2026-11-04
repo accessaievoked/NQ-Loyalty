@@ -16,10 +16,11 @@ export const EMAIL_KINDS = {
       ["expires_at", "Expiry date of these points (empty if they never expire)"],
       ["store", "Your store name"],
       ["shop_url", "Link to your store"],
+      ["support_email", "Where customers can reach you (your reply-to address)"],
     ],
     sample: {
       first_name: "Alex", points: "120", balance: "1,370", reason: "your order #1042 earned points",
-      expires_at: "2027-01-15", store: "Claura", shop_url: "https://example.myshopify.com",
+      expires_at: "2027-01-15", store: "Claura", shop_url: "https://example.myshopify.com", support_email: "care@claura.in",
     },
   },
   redeemed: {
@@ -32,10 +33,11 @@ export const EMAIL_KINDS = {
       ["expires_at", "Code expiry date (empty if none)"],
       ["store", "Your store name"],
       ["shop_url", "Link to your store"],
+      ["support_email", "Where customers can reach you (your reply-to address)"],
     ],
     sample: {
       first_name: "Alex", reward_name: "Use points at checkout (500 points)", code: "LOY-8F2A91C0DE",
-      expires_at: "2026-12-01", store: "Claura", shop_url: "https://example.myshopify.com",
+      expires_at: "2026-12-01", store: "Claura", shop_url: "https://example.myshopify.com", support_email: "care@claura.in",
     },
   },
   expiring: {
@@ -47,8 +49,9 @@ export const EMAIL_KINDS = {
       ["expires_at", "The date they expire"],
       ["store", "Your store name"],
       ["shop_url", "Link to your store"],
+      ["support_email", "Where customers can reach you (your reply-to address)"],
     ],
-    sample: { first_name: "Alex", points: "200", expires_at: "2026-12-15", store: "Claura", shop_url: "https://example.myshopify.com" },
+    sample: { first_name: "Alex", points: "200", expires_at: "2026-12-15", store: "Claura", shop_url: "https://example.myshopify.com", support_email: "care@claura.in" },
   },
   otp: {
     label: "Login code",
@@ -57,19 +60,21 @@ export const EMAIL_KINDS = {
       ["code", "The 6-digit login code (required)"],
       ["store", "Your store name"],
       ["shop_url", "Link to your store"],
+      ["support_email", "Where customers can reach you (your reply-to address)"],
     ],
-    sample: { code: "483920", store: "Claura", shop_url: "https://example.myshopify.com" },
+    sample: { code: "483920", store: "Claura", shop_url: "https://example.myshopify.com", support_email: "care@claura.in" },
     required: ["code"],
   },
 };
 
 export const FONT_STACKS = {
-  system: 'system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
-  trebuchet: '"Trebuchet MS","Lucida Grande",Verdana,sans-serif',
+  // Single quotes inside: these go in a double-quoted style="…" attribute.
+  system: "system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif",
+  trebuchet: "'Trebuchet MS','Lucida Grande',Verdana,sans-serif",
   verdana: "Verdana,Geneva,sans-serif",
-  serif: 'Georgia,"Times New Roman",serif',
-  palatino: '"Palatino Linotype",Palatino,"Book Antiqua",serif',
-  mono: 'ui-monospace,Menlo,Consolas,"Courier New",monospace',
+  serif: "Georgia,'Times New Roman',serif",
+  palatino: "'Palatino Linotype',Palatino,'Book Antiqua',serif",
+  mono: "ui-monospace,Menlo,Consolas,'Courier New',monospace",
 };
 export const FONT_LABELS = {
   system: "Sans-serif (system)", trebuchet: "Trebuchet", verdana: "Verdana",
@@ -79,12 +84,18 @@ export const FONT_LABELS = {
 export const EMAIL_BLOCK_TYPES = {
   brand: {
     label: "Store name / logo", icon: "◧",
-    defaults: { text: "{{store}}", logo: "", logoWidth: 120 },
+    defaults: { text: "{{store}}", logo: "", logoWidth: 120, logoFull: false },
     fields: [
       { key: "text", label: "Text", type: "text" },
       { key: "logo", label: "Logo image URL (https://…)", type: "text", help: "Shown above the text. Leave empty for text only." },
       { key: "logoWidth", label: "Logo width (px)", type: "number", min: 40, max: 400 },
+      { key: "logoFull", label: "Logo fills the whole header", type: "toggle", help: "Edge to edge, like a banner image. Spacing and background are ignored." },
     ],
+  },
+  badge: {
+    label: "Label pill", icon: "◖",
+    defaults: { text: "NEW" },
+    fields: [{ key: "text", label: "Text", type: "text", help: "A small coloured pill above the heading, e.g. POINTS EARNED." }],
   },
   heading: {
     label: "Heading", icon: "H",
@@ -244,22 +255,25 @@ const CONTENT = {
 // ---- ready-made designs -------------------------------------------------------------------------
 // `styles` maps a block type to its look; `muted` is added to muted text blocks; `append` adds
 // closing blocks (links, footer). Applying one rebuilds the email's blocks and design.
+const BADGES = { points_earned: "Points earned", redeemed: "Reward code", expiring: "Points expiring", otp: "Login code" };
+
 export const EMAIL_PRESETS = {
   blush: {
     label: "Blush",
-    note: "Soft pink and rounded, in the style of Claura",
-    theme: { brand: "#f0708a", heading: "#2b1a20", text: "#5b4249", muted: "#9a7f87", background: "#fdf0f3", card: "#ffffff", radius: 24, font: "trebuchet", width: 560, pagePad: 32 },
+    note: "Pink header band, label pill, left-aligned — like the Claura order emails",
+    brandColors: true,
+    theme: { brand: "#f18599", heading: "#1f1d1e", text: "#3a3a3a", muted: "#8b8b8b", background: "#f4f4f5", card: "#ffffff", radius: 7, font: "system", width: 600, pagePad: 24, padX: 40 },
     styles: {
-      brand: { bg: "#f6c8d1", color: "#7a2a3c", align: "center", size: 13, weight: "700", upper: true, padTop: 22, padBottom: 22 },
-      heading: { align: "center", size: 28, weight: "700", padTop: 30, padBottom: 6 },
-      text: { align: "center", size: 15, lineHeight: "1.75", padX: 40 },
+      brand: { bg: "#d9788a", color: "#ffffff", align: "center", size: 12, weight: "600", upper: true, padTop: 36, padBottom: 36 },
+      badge: { box: "#fde8ed", color: "#f0788d", size: 11, weight: "700", radius: 8, boxPad: 6, padTop: 28 },
+      heading: { size: 26, weight: "700", padTop: 14, padBottom: 6 },
+      text: { size: 15, lineHeight: "1.7" },
       textMuted: { size: 13 },
-      code: { align: "center", box: "#fdf0f3", color: "#c2410c", borderColor: "#f0708a", borderW: 2, radius: 14, boxPad: 16 },
-      button: { align: "center", radius: 999, boxPad: 15, size: 15, weight: "700", padTop: 22, padBottom: 14 },
+      code: { box: "#fdf2f4", color: "#d9546b", borderColor: "#f4b8c3", borderW: 1, radius: 10, boxPad: 14 },
+      button: { box: "#f18599", radius: 60, boxPad: 12, size: 15, weight: "600", padTop: 18, padBottom: 30 },
     },
     append: [
-      ["links", { items: "Shop {{store}} | {{shop_url}}", separator: "·" }, { align: "center", padTop: 10, padBottom: 6, size: 13 }],
-      ["footer", {}, { align: "center", padTop: 10, padBottom: 28, padX: 40 }],
+      ["footer", { text: "**Questions about your points?**\nJust reply to this email or reach us at {{support_email}}. We're happy to help." }, { bg: "#f18599", color: "#ffffff", align: "center", size: 13, padTop: 30, padBottom: 30 }],
     ],
   },
   classic: {
@@ -442,20 +456,93 @@ export const EMAIL_PRESETS = {
   },
 };
 
+// ---- store brand ----------------------------------------------------------------------------------
+// One look for all of a store's emails: logo, colour, corner radius and footer wording, set once.
+// Blank fields mean "the design's own". The logo and footer wording go into every design; colours
+// and radius only into designs that opt in with `brandColors` (the default, Blush, does).
+
+export const EMPTY_BRAND = { logoUrl: "", logoFull: true, brandColor: "", radius: "", headerColor: "", buttonColor: "", footerColor: "", footerTitle: "", footerText: "" };
+
+const oneLine = (v, max) => String(v ?? "").replace(/[\r\n]+/g, " ").trim().slice(0, max);
+
+export function normalizeBrand(b) {
+  const src = b && typeof b === "object" ? b : {};
+  const logo = oneLine(src.logoUrl, 500);
+  return {
+    logoUrl: /^https:\/\//i.test(logo) ? logo : "",
+    logoFull: src.logoFull !== false,
+    brandColor: hex(src.brandColor, ""),
+    radius: src.radius === "" || src.radius == null || !Number.isFinite(Number(src.radius)) ? "" : clamp(src.radius, 0, 48, 14),
+    headerColor: hex(src.headerColor, ""),
+    buttonColor: hex(src.buttonColor, ""),
+    footerColor: hex(src.footerColor, ""),
+    footerTitle: oneLine(src.footerTitle, 80),
+    footerText: oneLine(src.footerText, 240),
+  };
+}
+
+/** Mix a #rrggbb colour toward black (negative amount) or white (positive), 0..1. */
+export function shade(color, amount) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(color).trim());
+  if (!m) return color;
+  const h = m[1].length === 3 ? m[1].split("").map((c) => c + c).join("") : m[1];
+  const t = amount < 0 ? 0 : 255;
+  const k = Math.abs(amount);
+  const ch = [0, 2, 4].map((i) => Math.round(parseInt(h.slice(i, i + 2), 16) * (1 - k) + t * k).toString(16).padStart(2, "0"));
+  return `#${ch.join("")}`;
+}
+
+// The footer wording may say {email}; that is the store's contact address.
+const brandText = (v) => String(v).replace(/\{email\}/gi, "{{support_email}}");
+
+function applyBrand(t, preset, brand) {
+  const b = normalizeBrand(brand);
+  const blocks = t.blocks.map((blk) => ({ ...blk, settings: { ...blk.settings }, style: { ...blk.style } }));
+  const theme = { ...t.theme };
+
+  const head = blocks.find((x) => x.type === "brand");
+  if (head && b.logoUrl) {
+    head.settings.logo = b.logoUrl;
+    head.settings.logoWidth = 130;
+    head.settings.logoFull = b.logoFull; // the logo image is the whole header
+    if (b.logoFull) head.settings.text = "";
+  }
+
+  const footer = [...blocks].reverse().find((x) => x.type === "footer");
+  if (footer && (b.footerTitle || b.footerText)) {
+    const title = b.footerTitle || "Questions about your points?";
+    const text = b.footerText || "Just reply to this email or reach us at {email}. We're happy to help.";
+    footer.settings.text = `**${title}**\n${brandText(text)}`;
+  }
+
+  if (preset.brandColors) {
+    if (b.brandColor) theme.brand = b.brandColor;
+    if (b.radius !== "") theme.radius = b.radius;
+    const base = theme.brand;
+    if (head && !(b.logoUrl && b.logoFull)) head.style.bg = b.headerColor || (b.brandColor ? shade(base, -0.08) : head.style.bg);
+    for (const blk of blocks) {
+      if (blk.type === "button" && (b.buttonColor || b.brandColor)) blk.style.box = b.buttonColor || b.brandColor;
+      if (blk.type === "footer" && blk.style.bg && (b.footerColor || b.brandColor)) blk.style.bg = b.footerColor || b.brandColor;
+    }
+  }
+  return { ...t, theme, blocks };
+}
+
 /** Build a kind's email from a design: the same words, a different look. */
-export function buildPreset(kind, presetId) {
+export function buildPreset(kind, presetId, brand) {
   const p = EMAIL_PRESETS[presetId] || EMAIL_PRESETS.blush;
   const c = (CONTENT[kind] || CONTENT.points_earned)();
   const blocks = c.blocks.map((b) => ({
     ...b,
     style: { ...(p.styles[b.type] || {}), ...(b.type === "text" && b.settings.muted ? p.styles.textMuted || {} : {}) },
   }));
+  if (p.styles.badge) blocks.splice(1, 0, makeEmailBlock("badge", { text: BADGES[kind] || "Update" }, p.styles.badge));
   for (const [type, settings, style] of p.append || []) blocks.push(makeEmailBlock(type, settings, style));
-  return { kind, mode: "blocks", subject: c.subject, theme: { ...baseTheme(), ...p.theme }, blocks, html: "" };
+  return applyBrand({ kind, mode: "blocks", subject: c.subject, theme: { ...baseTheme(), ...p.theme }, blocks, html: "" }, p, brand);
 }
 
 export const DEFAULT_PRESET = "blush";
-export const defaultEmailTemplate = (kind) => buildPreset(kind, DEFAULT_PRESET);
+export const defaultEmailTemplate = (kind, brand) => buildPreset(kind, DEFAULT_PRESET, brand);
 
 const clamp = (n, lo, hi, fb) => {
   const v = Number(n);
@@ -464,8 +551,8 @@ const clamp = (n, lo, hi, fb) => {
 const hex = (v, fb) => (isHex(v) ? v.trim() : fb);
 
 /** Make any stored/incoming template safe to render. */
-export function normalizeEmailTemplate(kind, input) {
-  const base = defaultEmailTemplate(kind);
+export function normalizeEmailTemplate(kind, input, brand) {
+  const base = defaultEmailTemplate(kind, brand);
   const src = input && typeof input === "object" ? input : {};
   const t = { ...base.theme, ...(src.theme || {}) };
   const theme = {
@@ -571,11 +658,22 @@ function renderBlock(b, theme, vars) {
 
   switch (b.type) {
     case "brand": {
-      const logo = /^https:\/\//i.test(s.logo || "")
-        ? `<img src="${esc(s.logo)}" alt="" width="${px(s.logoWidth, 120)}" style="display:${st.align === "center" ? "inline-block" : "block"};max-width:100%;height:auto;border:0;margin:0 0 8px">`
+      const hasLogo = /^https:\/\//i.test(s.logo || "");
+      if (hasLogo && s.logoFull) {
+        // A banner-style logo: the header is the image itself.
+        return `<tr><td style="padding:0;font-size:0;line-height:0"><img src="${esc(s.logo)}" alt="${esc(vars.store ?? "")}" width="700" style="display:block;width:100%;max-width:100%;height:auto;border:0"></td></tr>`;
+      }
+      const logo = hasLogo
+        ? `<img src="${esc(s.logo)}" alt="${esc(vars.store ?? "")}" width="${px(s.logoWidth, 120)}" style="display:${st.align === "center" ? "inline-block" : "block"};max-width:100%;height:auto;border:0;margin:0 0 8px">`
         : "";
       const text = `<div style="${textCss(st, { color: theme.muted, size: 13, weight: "400", line: "1.4" })}">${rich(s.text, vars, link)}</div>`;
-      return row(st, { t: 28, b: 8 }, logo + text);
+      return row(st, { t: 28, b: 8 }, logo + (String(s.text || "").trim() || !hasLogo ? text : ""));
+    }
+    case "badge": {
+      const bg = isHex(st.box) ? st.box : theme.background;
+      const fg = isHex(st.color) ? st.color : theme.brand;
+      return row(st, { t: 22, b: 0 },
+        `<span style="display:inline-block;background:${bg};color:${fg};border-radius:${st.radius != null ? st.radius : 8}px;padding:${px(st.boxPad, 6)}px ${px(st.boxPad, 6) * 2}px;font-size:${px(st.size, 11)}px;font-weight:${st.weight || 700};letter-spacing:.08em;text-transform:uppercase;line-height:1.2">${rich(s.text, vars, fg)}</span>`);
     }
     case "heading":
       return row(st, { t: 0, b: 8, align: s.align === "center" || s.align === "right" ? s.align : "" },
@@ -657,8 +755,8 @@ ${rows}
 }
 
 /** Render a template with variables → { subject, html }. Never throws. */
-export function renderEmail(kind, template, vars) {
-  const t = normalizeEmailTemplate(kind, template);
+export function renderEmail(kind, template, vars, brand) {
+  const t = normalizeEmailTemplate(kind, template, brand);
   const subject = String(t.subject).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => String(vars[k] ?? "")).replace(/[\r\n]+/g, " ").trim().slice(0, 200);
 
   if (t.mode === "html" && t.html.trim()) {
@@ -668,8 +766,8 @@ export function renderEmail(kind, template, vars) {
 }
 
 /** The editor's "start from blocks" button: the rendered HTML with variables left in place. */
-export function blocksToHtml(kind, template) {
-  const t = normalizeEmailTemplate(kind, { ...template, mode: "blocks" });
+export function blocksToHtml(kind, template, brand) {
+  const t = normalizeEmailTemplate(kind, { ...template, mode: "blocks" }, brand);
   const vars = Object.fromEntries((EMAIL_KINDS[kind]?.vars || []).map(([k]) => [k, `{{${k}}}`]));
   const rows = t.blocks.map((b) => renderBlock({ ...b, settings: { ...b.settings, onlyIf: "" } }, t.theme, vars)).join("\n");
   return wrap(t.theme, rows);

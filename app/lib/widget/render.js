@@ -386,16 +386,24 @@ function renderHtmlTemplate(config, state, selectedId) {
 
 // --- styles ----------------------------------------------------------------------------
 
-/** Side-drawer rules. Kept separate so they are also added when a developer replaces the CSS. */
+/**
+ * "My Rewards" window rules. Kept separate so they are also added when a developer replaces the CSS.
+ * Desktop: a centred window over a dimmed page. Phones: a sheet rising from the bottom. There is no
+ * close button — a tap outside or Escape closes it.
+ */
 export function drawerCss(config) {
   const w = (config.account && config.account.drawerWidth) || 420;
   return `
-.lw-is-drawer .lw-backdrop { position: fixed; inset: 0; z-index: 2147483000; background: rgba(15, 23, 42, .45); animation: lw-fade .2s ease-out; }
+.lw-is-drawer .lw-backdrop { position: fixed; inset: 0; z-index: 2147483000; background: rgba(15, 23, 42, .5); animation: lw-fade .2s ease-out; }
 .lw-is-drawer .lw-backdrop[hidden] { display: none; }
-.lw-is-drawer .lw-panel { position: fixed; z-index: 2147483001; top: 0; right: 0; bottom: 0; left: auto; width: min(${w}px, 100vw); max-width: 100vw; max-height: none; border-radius: 0; border-width: 0 0 0 1px; }
-.lw-is-drawer .lw-panel.lw-anim { animation: lw-slide .26s cubic-bezier(.2, .8, .2, 1); }
+.lw-is-drawer .lw-panel { position: fixed; z-index: 2147483001; top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); width: min(${w}px, calc(100vw - 32px)); max-height: min(86vh, 760px); border-radius: calc(var(--r) + 6px); box-shadow: 0 24px 70px rgba(15, 23, 42, .35); }
+.lw-is-drawer .lw-panel.lw-anim { animation: lw-window .22s cubic-bezier(.2, .8, .2, 1); }
+.lw-is-drawer .lw-header { padding-right: var(--pad); }
+.lw-root.lw-is-drawer.lw-mobile .lw-panel { top: auto; bottom: 0; left: 0; right: 0; transform: none; width: 100%; max-height: 88vh; border-radius: 20px 20px 0 0; box-shadow: 0 -10px 40px rgba(15, 23, 42, .3); }
+.lw-root.lw-is-drawer.lw-mobile .lw-panel.lw-anim { animation: lw-sheet .26s cubic-bezier(.2, .8, .2, 1); }
 .lw-is-drawer.lw-preview .lw-backdrop, .lw-is-drawer.lw-preview .lw-panel { position: absolute; }
-@keyframes lw-slide { from { transform: translateX(100%); } to { transform: none; } }
+@keyframes lw-window { from { opacity: 0; transform: translate(-50%, calc(-50% + 14px)) scale(.97); } to { opacity: 1; transform: translate(-50%, -50%); } }
+@keyframes lw-sheet { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes lw-fade { from { opacity: 0; } to { opacity: 1; } }
 `;
 }
@@ -592,11 +600,10 @@ export const DEFAULT_SHELL = `<div class="{{root_classes}}">
   </div>
 </div>`;
 
-// The "My Rewards" side drawer opened from the customer account page (or any [data-loyalty-open]).
+// The "My Rewards" window opened from the customer account page (or any [data-loyalty-open]).
 export const DEFAULT_DRAWER_SHELL = `<div class="{{root_classes}}">
   <div class="lw-backdrop" data-action="toggle" {{panel_hidden}}></div>
   <aside class="{{panel_classes}}" role="dialog" aria-modal="true" aria-label="{{launcher_label}}" {{panel_hidden}}>
-    <button class="lw-close" data-action="toggle" type="button" aria-label="Close">×</button>
     <div class="lw-body">{{content}}</div>
   </aside>
 </div>`;

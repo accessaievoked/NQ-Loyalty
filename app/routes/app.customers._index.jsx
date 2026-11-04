@@ -2,7 +2,6 @@ import { Form, useLoaderData } from "react-router";
 import { requireStore } from "../services/auth.server";
 import db from "../db.server";
 import { referralCounts } from "../services/referralstats.server";
-import BackButton from "../components/BackButton";
 
 const PAGE = 25;
 const fmt = (n) => new Intl.NumberFormat("en-IN").format(n);
@@ -61,7 +60,6 @@ export default function Customers() {
       <s-button slot="primary-action" variant="primary" icon="import" href="/app/customers/import">
         Import customers
       </s-button>
-      <BackButton href="/app" label="Back to home" />
       <s-section>
         <s-stack gap="base">
           <Form method="get">

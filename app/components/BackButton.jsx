@@ -1,8 +1,3 @@
-// A back arrow for pages built with Polaris. Shows an icon only (the label is for screen readers).
-export default function BackButton({ href, label }) {
-  return <s-button variant="tertiary" icon="arrow-left" href={href} accessibilityLabel={label} />;
-}
-
 // The same arrow for the full-screen editors, drawn inline so it matches their own styling.
 export function ArrowLeft({ size = 18 }) {
   return (

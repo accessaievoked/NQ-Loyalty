@@ -1,7 +1,7 @@
 import nodemailer from "nodemailer";
 import prisma from "../db.server.js";
 import { EMAIL_KINDS, renderEmail } from "../lib/email/templates.js";
-import { buildEmailVars, renderStoreEmail } from "./emailtemplates.server.js";
+import { buildEmailVars, renderStoreEmail, getEmailBrand } from "./emailtemplates.server.js";
 
 let transporter;
 function getTransporter() {
@@ -75,7 +75,7 @@ export async function sendTemplateTest({ store, kind, template, to }) {
   if (!smtpConfigured()) throw new Error("SMTP isn't configured on the server");
   const settings = store.settings ?? (await prisma.storeSettings.findUnique({ where: { storeId: store.id } }));
   const vars = buildEmailVars(store, {});
-  const sample = { ...EMAIL_KINDS[kind].sample, store: vars.store, shop_url: vars.shop_url };
-  const { subject, html } = renderEmail(kind, template, sample);
+  const sample = { ...EMAIL_KINDS[kind].sample, store: vars.store, shop_url: vars.shop_url, support_email: vars.support_email };
+  const { subject, html } = renderEmail(kind, template, sample, await getEmailBrand(store.id));
   await deliver({ store, settings, to, subject: `[Test] ${subject}`, html });
 }

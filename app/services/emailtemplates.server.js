@@ -3,6 +3,7 @@ import {
   EMAIL_KINDS,
   defaultEmailTemplate,
   missingRequired,
+  normalizeBrand,
   normalizeEmailTemplate,
   renderEmail,
 } from "../lib/email/templates.js";
@@ -12,26 +13,38 @@ import {
 
 export const isKind = (k) => Object.prototype.hasOwnProperty.call(EMAIL_KINDS, k);
 
-function fromRow(kind, row) {
-  if (!row) return defaultEmailTemplate(kind);
-  return normalizeEmailTemplate(kind, { mode: row.mode, subject: row.subject, html: row.html, ...(row.config || {}) });
+// The store-wide look (logo, colours, footer wording). Emails the merchant hasn't customised use it.
+export async function getEmailBrand(storeId) {
+  const s = await prisma.storeSettings.findUnique({ where: { storeId }, select: { emailBrand: true } });
+  return normalizeBrand(s?.emailBrand);
+}
+
+export async function saveEmailBrand(storeId, input) {
+  const brand = normalizeBrand(input);
+  await prisma.storeSettings.update({ where: { storeId }, data: { emailBrand: brand } });
+  return brand;
+}
+
+function fromRow(kind, row, brand) {
+  if (!row) return defaultEmailTemplate(kind, brand);
+  return normalizeEmailTemplate(kind, { mode: row.mode, subject: row.subject, html: row.html, ...(row.config || {}) }, brand);
 }
 
 export async function getEmailTemplate(storeId, kind) {
-  const row = await prisma.emailTemplate.findUnique({ where: { storeId_kind: { storeId, kind } } });
-  return { template: fromRow(kind, row), customised: !!row };
+  const [row, brand] = await Promise.all([prisma.emailTemplate.findUnique({ where: { storeId_kind: { storeId, kind } } }), getEmailBrand(storeId)]);
+  return { template: fromRow(kind, row, brand), customised: !!row };
 }
 
 export async function listEmailTemplates(storeId) {
-  const rows = await prisma.emailTemplate.findMany({ where: { storeId } });
+  const [rows, brand] = await Promise.all([prisma.emailTemplate.findMany({ where: { storeId } }), getEmailBrand(storeId)]);
   const byKind = new Map(rows.map((r) => [r.kind, r]));
-  return Object.keys(EMAIL_KINDS).map((kind) => ({ kind, customised: byKind.has(kind), template: fromRow(kind, byKind.get(kind)) }));
+  return Object.keys(EMAIL_KINDS).map((kind) => ({ kind, customised: byKind.has(kind), template: fromRow(kind, byKind.get(kind), brand) }));
 }
 
 /** Validate and save. Returns { ok } or { ok:false, errors }. */
 export async function saveEmailTemplate(storeId, kind, input) {
   if (!isKind(kind)) return { ok: false, errors: ["Unknown email"] };
-  const t = normalizeEmailTemplate(kind, input);
+  const t = normalizeEmailTemplate(kind, input, await getEmailBrand(storeId));
   const errors = [];
   if (t.mode === "html" && !t.html.trim()) errors.push("The HTML is empty. Write your HTML, or switch back to blocks.");
   if (!t.subject.trim()) errors.push("Add a subject line.");
@@ -60,6 +73,8 @@ export function buildEmailVars(store, data = {}) {
   return {
     store: store.name || store.shop,
     shop_url: `https://${store.shop}`,
+    // Where customers can reach the store: the reply-to address if set, else the shop's contact email.
+    support_email: store.settings?.replyTo || store.email || store.shop,
     first_name: data.firstName || "there",
     points: fmt(data.points),
     balance: fmt(data.balance),
@@ -78,11 +93,11 @@ export async function renderStoreEmail(store, kind, data) {
   const vars = buildEmailVars(store, data);
   try {
     const { template } = await getEmailTemplate(store.id, kind);
-    const out = renderEmail(kind, template, vars);
+    const out = renderEmail(kind, template, vars, await getEmailBrand(store.id));
     const broken = missingRequired(kind, template, vars).length > 0;
     if (!broken && out.html.trim()) return out;
   } catch (e) {
     console.warn("[email] template failed, using default:", e.message);
   }
-  return renderEmail(kind, defaultEmailTemplate(kind), vars);
+  return renderEmail(kind, defaultEmailTemplate(kind), vars, await getEmailBrand(store.id).catch(() => undefined));
 }

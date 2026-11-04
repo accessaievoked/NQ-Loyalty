@@ -4,8 +4,8 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { requireStore } from "../services/auth.server";
 import { connectJudgeMe, disconnect, getIntegration, syncJudgeMe } from "../services/integrations.server";
 import { disableFastCheckout, getFastCheckout, saveFastCheckout } from "../services/fastcheckout.server";
+import { clearStackRules, saveStackRules } from "../services/stacking.server";
 import db from "../db.server";
-import BackButton from "../components/BackButton";
 
 // Earning and spending rules, and review points, on one page.
 
@@ -47,12 +47,12 @@ export const loader = async ({ request }) => {
   const s = store.settings;
   return {
     currency: store.currency,
-    settings: { earnTrigger: s.earnTrigger, holdDays: s.holdDays, expiryDays: s.expiryDays, minRedeemPoints: s.minRedeemPoints },
+    settings: { earnTrigger: s.earnTrigger, holdDays: s.holdDays, expiryDays: s.expiryDays, minRedeemPoints: s.minRedeemPoints, allowStackedCodes: s.allowStackedCodes },
     rules: rules.map((r) => ({ id: r.id, name: r.name, type: r.type, value: r.value, minOrderAmount: Number(r.minOrderAmount), active: r.active })),
     rewards: rewards.map((r) => ({
       id: r.id, name: r.name, type: r.type, value: Number(r.value), pointsCost: r.pointsCost, minPoints: r.minPoints,
       maxPoints: r.maxPoints ?? 0, minOrderAmount: Number(r.minOrderAmount), codeValidDays: r.codeValidDays, active: r.active,
-      redemptions: r._count.redemptions,
+      redemptions: r._count.redemptions, noStackWith: r.noStackWith ?? [],
     })),
     fastCheckout: {
       enabled: !!fast?.enabled,
@@ -88,6 +88,7 @@ export const action = async ({ request }) => {
           holdDays: int(f.get("holdDays"), 0, 365),
           expiryDays: int(f.get("expiryDays"), 0, 3650),
           minRedeemPoints: int(f.get("minRedeemPoints"), 0, 1000000),
+          allowStackedCodes: f.get("codeStacking") === "many",
         },
       });
       return { ok: "Saved" };
@@ -149,6 +150,18 @@ export const action = async ({ request }) => {
       // Redemptions keep a snapshot of the reward name, so history survives deletion.
       await db.reward.deleteMany({ where: { id, storeId: store.id } });
       return { ok: "Removed" };
+    }
+
+    // ---- which reward codes may be held together
+    if (intent === "stack-save") {
+      const allowed = new Set();
+      for (const [k] of f.entries()) if (String(k).startsWith("ok:")) allowed.add(String(k).slice(3));
+      await saveStackRules(store.id, allowed);
+      return { ok: "Combinations saved" };
+    }
+    if (intent === "stack-clear") {
+      await clearStackRules(store.id);
+      return { ok: "Every combination is allowed again" };
     }
 
     // ---- fast checkout (Shiprocket)
@@ -446,6 +459,95 @@ function PresetGallery({ items, existing, singleton, onAdd, busy }) {
   );
 }
 
+// Which reward codes a customer may hold at the same time. Ticked = can be used together.
+function StackGrid({ rewards }) {
+  const fetcher = useFetcher();
+  useToast(fetcher);
+  const busy = fetcher.state !== "idle" || undefined;
+  const pairKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const fromRewards = () => {
+    const ok = new Set();
+    for (const a of rewards) for (const b of rewards) if (!(a.noStackWith.includes(b.id) || b.noStackWith.includes(a.id))) ok.add(pairKey(a.id, b.id));
+    return ok;
+  };
+  const [allowed, setAllowed] = useState(fromRewards);
+  const initial = JSON.stringify([...fromRewards()].sort());
+  const dirty = JSON.stringify([...allowed].sort()) !== initial;
+  const toggle = (a, b) =>
+    setAllowed((cur) => {
+      const next = new Set(cur);
+      const k = pairKey(a, b);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const save = () => {
+    const body = { intent: "stack-save" };
+    for (const k of allowed) body[`ok:${k}`] = "1";
+    fetcher.submit(body, { method: "post" });
+  };
+  const cell = { padding: "8px 10px", textAlign: "center", borderTop: "1px solid #eceef1" };
+  const short = (name) => (name.length > 22 ? `${name.slice(0, 21)}…` : name);
+
+  return (
+    <s-stack gap="base">
+      <s-paragraph>
+        Tick the rewards a customer may hold at the same time, so their codes can be used together in one order. A pair you leave unticked
+        can&apos;t coexist: if they already have an unused code for one, they can&apos;t redeem the other until it&apos;s used or expires. The
+        box where a reward meets itself means two of the same reward at once.
+      </s-paragraph>
+      <div style={{ border: "1px solid #e4e6ea", borderRadius: 12, overflow: "hidden" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13.5 }}>
+          <thead>
+            <tr style={{ background: "#f7f8fa" }}>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600 }} />
+              {rewards.map((r) => (
+                <th key={r.id} style={{ ...cell, borderTop: 0, fontWeight: 600 }} title={r.name}>
+                  {short(r.name)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rewards.map((a) => (
+              <tr key={a.id}>
+                <th style={{ ...cell, textAlign: "left", fontWeight: 600, background: "#f7f8fa" }} title={a.name}>
+                  {short(a.name)}
+                </th>
+                {rewards.map((b) => (
+                  <td key={b.id} style={cell}>
+                    <input
+                      type="checkbox"
+                      checked={allowed.has(pairKey(a.id, b.id))}
+                      onChange={() => toggle(a.id, b.id)}
+                      aria-label={a.id === b.id ? `Two “${a.name}” codes at once` : `“${a.name}” together with “${b.name}”`}
+                      style={{ width: 18, height: 18, accentColor: "#111827", cursor: "pointer" }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <s-stack direction="inline" gap="small" justifyContent="space-between">
+        <s-button
+          variant="tertiary"
+          onClick={() => setAllowed(new Set(rewards.flatMap((a) => rewards.map((b) => pairKey(a.id, b.id)))))}
+        >
+          Allow every combination
+        </s-button>
+        <s-button variant="primary" onClick={save} loading={busy} disabled={!dirty || undefined}>
+          Save combinations
+        </s-button>
+      </s-stack>
+      <s-text color="subdued">
+        Shopify decides how the discounts apply at checkout; we only decide which codes can exist together. Codes already issued aren&apos;t changed.
+      </s-text>
+    </s-stack>
+  );
+}
+
 function FastCheckout({ fc }) {
   const fetcher = useFetcher();
   useToast(fetcher);
@@ -573,7 +675,6 @@ export default function Rules() {
 
   return (
     <s-page heading="Rules">
-      <BackButton href="/app" label="Back to home" />
       <s-section heading="When points are credited">
         <settingsFetcher.Form method="post">
           <input type="hidden" name="intent" value="settings" />
@@ -587,6 +688,15 @@ export default function Rules() {
               <s-number-field label="Wait after that (days)" name="holdDays" min="0" step="1" value={String(settings.holdDays)} details="Your return window. 0 = credit straight away" />
               <s-number-field label="Points expire after (days)" name="expiryDays" min="0" step="1" value={String(settings.expiryDays)} details="0 = never expire. Customers get a reminder email first" />
               <s-number-field label="Minimum balance to redeem" name="minRedeemPoints" min="0" step="1" value={String(settings.minRedeemPoints)} />
+              <s-select
+                label="Reward codes in one order"
+                name="codeStacking"
+                value={settings.allowStackedCodes ? "many" : "one"}
+                details="Applies to codes made from now on. Codes already issued keep the setting they were made with."
+              >
+                <s-option value="one">One code at a time (recommended)</s-option>
+                <s-option value="many">Allow several codes together</s-option>
+              </s-select>
             </s-grid>
             <s-stack direction="inline" justifyContent="end">
               <s-button type="submit" variant="primary" loading={settingsFetcher.state !== "idle" || undefined}>Save</s-button>
@@ -632,6 +742,21 @@ export default function Rules() {
           <s-heading>Add a way to spend</s-heading>
           <PresetGallery items={p.redeem} existing={rewards} onAdd={addReward} busy={adder.state !== "idle"} />
         </s-stack>
+      </s-section>
+
+      <s-section heading="Using several reward codes together">
+        {settings.allowStackedCodes ? (
+          rewards.length ? (
+            <StackGrid key={rewards.map((r) => `${r.id}:${r.noStackWith.join(",")}`).join(";")} rewards={rewards} />
+          ) : (
+            <s-paragraph>Add a reward above, then choose which ones can be combined.</s-paragraph>
+          )
+        ) : (
+          <s-paragraph>
+            Right now customers use one reward code at a time. Set <s-text type="strong">Reward codes in one order</s-text> to “Allow several
+            codes together” (at the top of this page) and save, and you&apos;ll choose here exactly which rewards can be used together.
+          </s-paragraph>
+        )}
       </s-section>
 
       <s-section heading="Fast checkout (Shiprocket)">

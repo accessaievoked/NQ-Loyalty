@@ -56,6 +56,7 @@ export async function loadAnalytics(store, rangeArg, fx = { from: store.currency
     topCustomers,
     earnedSeries,
     memberSeries,
+    orderSeries,
   ] = await Promise.all([
     prisma.customer.count({ where: { storeId: sid } }),
     prisma.customer.count({ where: { storeId: sid, ...(inRange ? { createdAt: inRange } : {}) } }),
@@ -110,6 +111,15 @@ export async function loadAnalytics(store, rangeArg, fx = { from: store.currency
       FROM "Customer"
       WHERE "storeId" = ${sid} AND "createdAt" >= ${seriesFrom} AND "createdAt" <= ${seriesTo}
       GROUP BY 1 ORDER BY 1`,
+    // Member revenue per day/week, and how much of it came from orders that used a points code.
+    prisma.$queryRaw`
+      SELECT to_char(date_trunc(${bucket}, "createdAt"), 'YYYY-MM-DD') AS day,
+             COALESCE(SUM("eligibleAmount") FILTER (WHERE "customerId" IS NOT NULL), 0)::float AS revenue,
+             COALESCE(SUM("eligibleAmount") FILTER (WHERE "loyaltyDiscount" > 0), 0)::float AS loyalty_revenue,
+             COUNT(*) FILTER (WHERE "customerId" IS NOT NULL)::int AS orders
+      FROM "Order"
+      WHERE "storeId" = ${sid} AND "cancelledAt" IS NULL AND "createdAt" >= ${seriesFrom} AND "createdAt" <= ${seriesTo}
+      GROUP BY 1 ORDER BY 1`,
   ]);
 
   const rewardNames = new Map(
@@ -139,6 +149,7 @@ export async function loadAnalytics(store, rangeArg, fx = { from: store.currency
   for (let t = cursor.getTime(); t <= seriesTo.getTime() && days_.length < 400; t += step) days_.push(new Date(t).toISOString().slice(0, 10));
   const earnedBy = new Map(earnedSeries.map((r) => [r.day, r]));
   const membersBy = new Map(memberSeries.map((r) => [r.day, r.members]));
+  const ordersBy = new Map(orderSeries.map((r) => [r.day, r]));
 
   return {
     currency: fx.to,
@@ -193,6 +204,9 @@ export async function loadAnalytics(store, rangeArg, fx = { from: store.currency
       earned: earnedBy.get(day)?.earned ?? 0,
       redeemed: earnedBy.get(day)?.redeemed ?? 0,
       members: membersBy.get(day) ?? 0,
+      revenue: m(ordersBy.get(day)?.revenue),
+      loyaltyRevenue: m(ordersBy.get(day)?.loyalty_revenue),
+      orders: ordersBy.get(day)?.orders ?? 0,
     })),
   };
 }

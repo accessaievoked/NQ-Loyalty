@@ -94,7 +94,10 @@ model StoreSettings {
   expiryDays  Int         @default(0)
 
   // Redemption
-  minRedeemPoints Int @default(100)
+  minRedeemPoints   Int     @default(100)
+  // false: a loyalty code can't be combined with another loyalty code (or other discounts), so a
+  // customer uses one at a time. true: codes are created so Shopify lets them stack.
+  allowStackedCodes Boolean @default(false)
 
   // Notifications
   emailsEnabled      Boolean @default(true)
@@ -104,6 +107,8 @@ model StoreSettings {
   expiryReminderDays Int     @default(7)
   senderName         String?
   replyTo            String?
+  // Store-wide email look: logo, colours, footer wording (see normalizeBrand in lib/email/templates.js).
+  emailBrand         Json?
 
   // Reporting currency: admin reports (analytics, referral revenue) can be shown converted from
   // the store's currency. Rewards/discounts and everything customers see stay in the store currency.
@@ -289,6 +294,9 @@ model Reward {
   // Days the generated discount code stays valid. 0 = no expiry.
   codeValidDays  Int        @default(30)
   active         Boolean    @default(true)
+  // Ids of rewards that must NOT be held together with this one (when several codes are allowed).
+  // A pair is blocked if either side lists the other; listing its own id blocks two of the same.
+  noStackWith    String[]   @default([])
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 

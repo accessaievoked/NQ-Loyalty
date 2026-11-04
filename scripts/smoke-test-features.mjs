@@ -499,7 +499,10 @@ try {
       assert.deepEqual(E.missingRequired(kind, tpl, E.EMAIL_KINDS[kind].sample), []);             // the login code survives every design
     }
   }
-  assert.ok(E.renderEmail("points_earned", E.defaultEmailTemplate("points_earned"), E.EMAIL_KINDS.points_earned.sample).html.includes("#f0708a")); // Claura-style blush is the default
+  const dflt = E.renderEmail("points_earned", E.defaultEmailTemplate("points_earned"), E.EMAIL_KINDS.points_earned.sample).html;
+  assert.ok(dflt.includes("#d9788a") && dflt.includes("#f18599"));                              // Claura-style blush is the default: pink header band…
+  assert.ok(/display:inline-block;background:#fde8ed[^>]*>Points earned</i.test(dflt));         // …a label pill…
+  assert.ok(dflt.includes("Questions about your points?") && dflt.includes("background:#f18599")); // …and the pink footer band
   assert.deepEqual(E.normalizeEmailStyle({ bg: "red;x", box: "#abc", size: 999, padTop: "12", weight: "900", italic: "yes", upper: true }), { box: "#abc", size: 48, padTop: 12, upper: true });
   const styledMail = E.renderEmail("redeemed", {
     blocks: [
@@ -628,6 +631,7 @@ try {
     for (const kind of Object.keys(EM.EMAIL_KINDS)) {
       const out = EM.renderEmail(kind, EM.buildPreset(kind, id), { store: "S", points: 5, balance: 9, first_name: "A", code: "CODE1", reward_name: "R", expires_at: "d", reason: "r", shop_url: "https://x.test" });
       assert.ok(out.html.includes("<table") && !out.html.includes("undefined"), `${id}/${kind}`);
+      assert.ok(/<body style="[^"]*font-family:[^;"]+;color:#/.test(out.html), `${id}/${kind}: the font stack must not break the body style attribute`);
       if (kind === "otp") assert.ok(out.html.includes("CODE1"), `${id} keeps the login code`);
     }
   }
@@ -696,6 +700,100 @@ try {
   await FC.disableFastCheckout(store.id);
   assert.ok(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "5.6.7.8" })));  // switched off → locked
   ok("fast checkout: key + IP checked, phone lookup (formats, ambiguity), redeem returns a single-use code once per requestId, unaffordable/unknown rejected");
+
+  // ---- store-wide email brand (logo, colour, footer) + contact address variable
+  const ETS = await import("../app/services/emailtemplates.server.js");
+  const claura = {
+    logoUrl: "https://cdn.shopify.com/s/files/1/0845/4284/9298/files/unnamed_2.png?v=1792689738",
+    logoFull: true, brandColor: "#f18599", radius: 7,
+    footerTitle: "Questions about this order?", footerText: "Just reply to this email or reach us at {email}. We're happy to help.",
+  };
+  assert.equal((await ETS.getEmailBrand(store.id)).logoUrl, "");                           // no brand yet
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { replyTo: "care@claura.in" } });
+  await reload();
+  assert.equal(ETS.buildEmailVars(store, {}).support_email, "care@claura.in");
+  assert.equal((await ETS.saveEmailBrand(store.id, { ...claura, logoUrl: "http://insecure.test/x.png" })).logoUrl, "");  // https only
+  await ETS.saveEmailBrand(store.id, claura);
+  const mailed = (await ETS.renderStoreEmail(await reload(), "points_earned", { firstName: "Asha", points: 50, balance: 90 })).html;
+  assert.ok(/<img src="https:\/\/cdn\.shopify\.com[^"]+" alt="[^"]*" width="700" style="display:block;width:100%/.test(mailed));  // banner logo edge to edge
+  assert.ok(mailed.includes("Questions about this order?") && mailed.includes("reach us at care@claura.in"));                     // footer wording + {email}
+  assert.ok(/border-radius:60px/.test(mailed) && mailed.includes("border-radius:7px") && mailed.includes("#f18599"));             // pill button, 7px card, brand pink
+  const listed = (await ETS.listEmailTemplates(store.id)).find((t) => t.kind === "redeemed");
+  assert.equal(listed.customised, false);
+  assert.equal(listed.template.blocks[0].settings.logo, claura.logoUrl);                  // uncustomised emails follow the brand
+  await ETS.saveEmailTemplate(store.id, "expiring", (await ETS.getEmailTemplate(store.id, "expiring")).template);
+  await ETS.saveEmailBrand(store.id, { ...claura, brandColor: "#112233" });
+  const kept = (await ETS.listEmailTemplates(store.id)).find((t) => t.kind === "expiring");
+  assert.equal(kept.customised, true);
+  assert.equal(kept.template.theme.brand, "#f18599");                                      // a customised email keeps the design it was saved with
+  assert.equal((await ETS.listEmailTemplates(store.id)).find((t) => t.kind === "otp").template.theme.brand, "#112233");  // an uncustomised one moves with the brand
+  await ETS.resetEmailTemplate(store.id, "expiring");
+  await ETS.saveEmailBrand(store.id, {});
+  ok("email brand: logo/colour/radius/footer apply to default emails, {email} filled, customised emails keep their own look, https-only logo");
+
+  // ---- reward codes: one at a time by default, optional stacking
+  const stackRew = await prisma.reward.create({ data: { storeId: store.id, name: "Stack test", type: "FIXED_AMOUNT", value: 2, pointsCost: 100 } });
+  const stacker = await upsertCustomer(store.id, { shopifyCustomerId: "7101", email: "stack@import.test", emailVerified: true });
+  await postTransaction({ storeId: store.id, customerId: stacker.id, type: "ADJUST", points: 1000, source: "manual", idempotencyKey: "stack-seed" });
+  let stackSent;
+  const stackAdmin = { graphql: async (_q, { variables }) => { stackSent = variables.input; return { json: async () => ({ data: { discountCodeBasicCreate: { codeDiscountNode: { id: "gid://shopify/DiscountCodeNode/88" }, userErrors: [] } } }) }; } };
+  const { redeemReward: redeemNow } = await import("../app/services/redeem.server.js");
+  const stackRedeem = (requestId) => redeemNow({ store, admin: stackAdmin, customerId: stacker.id, rewardId: stackRew.id, requestId, points: 100 });
+  assert.equal((await prisma.storeSettings.findUnique({ where: { storeId: store.id } })).allowStackedCodes, false);  // default
+  await stackRedeem("stack-1");
+  assert.deepEqual(stackSent.combinesWith, { shippingDiscounts: true });                   // can't be combined with a second reward code
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { allowStackedCodes: true } });
+  await stackRedeem("stack-2");
+  assert.deepEqual(stackSent.combinesWith, { productDiscounts: true, orderDiscounts: true, shippingDiscounts: true });  // the merchant allowed stacking
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { allowStackedCodes: false } });
+  ok("reward codes: one at a time by default; stacking only when the merchant turns it on");
+
+  // ---- choosing which reward codes may be held together
+  const STK = await import("../app/services/stacking.server.js");
+  const mkReward = (name) => prisma.reward.create({ data: { storeId: store.id, name, type: "FIXED_AMOUNT", value: 1, pointsCost: 100 } });
+  const [rwA, rwB, rwC] = [await mkReward("Combo A"), await mkReward("Combo B"), await mkReward("Combo C")];
+  const holder = await upsertCustomer(store.id, { shopifyCustomerId: "7201", email: "combo@import.test", emailVerified: true });
+  await postTransaction({ storeId: store.id, customerId: holder.id, type: "ADJUST", points: 5000, source: "manual", idempotencyKey: "combo-seed" });
+  const get = (rw, n) => redeemNow({ store, admin: stackAdmin, customerId: holder.id, rewardId: rw.id, requestId: `combo-${rw.name}-${n}`, points: 100 });
+  const rewardRow = (rw) => prisma.reward.findUnique({ where: { id: rw.id } });
+  const pairs = (...p) => new Set(p.map(([a, b]) => `${a.id}|${b.id}`));
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { allowStackedCodes: true } });
+  await prisma.reward.updateMany({ where: { storeId: store.id, id: { notIn: [rwA.id, rwB.id, rwC.id] } }, data: { active: false } });
+
+  // block only A+B; everything else allowed (the rewards from earlier tests are in the grid too: allow all their pairs)
+  const everyone = await prisma.reward.findMany({ where: { storeId: store.id }, select: { id: true } });
+  const all = new Set(everyone.flatMap((a) => everyone.map((b) => `${a.id}|${b.id}`)));
+  all.delete(`${rwA.id}|${rwB.id}`);
+  all.delete(`${rwB.id}|${rwA.id}`);
+  await STK.saveStackRules(store.id, all);
+  assert.deepEqual([(await rewardRow(rwA)).noStackWith, (await rewardRow(rwB)).noStackWith, (await rewardRow(rwC)).noStackWith], [[rwB.id], [rwA.id], []]);  // one decision, recorded on both sides
+
+  await get(rwA, 1);
+  await get(rwC, 1);                                                                       // A + C allowed
+  await get(rwA, 2);                                                                       // two of the same allowed (not blocked)
+  await assert.rejects(() => get(rwB, 1), /can't be used together/);                       // B clashes with the unused A
+  const replay = await get(rwA, 1);                                                        // retrying a request is never blocked
+  assert.ok(replay.code);
+  await prisma.redemption.updateMany({ where: { customerId: holder.id, rewardId: rwA.id }, data: { status: "USED" } });
+  assert.ok((await get(rwB, 1)).code);                                                     // once A is used, B is fine
+  await get(rwC, 2);
+
+  const noPairs = new Set(all);
+  noPairs.delete(`${rwB.id}|${rwB.id}`);
+  await STK.saveStackRules(store.id, noPairs);
+  await assert.rejects(() => get(rwB, 2), /already have an unused/);                       // B+B now blocked
+  await STK.clearStackRules(store.id);
+  assert.deepEqual((await rewardRow(rwB)).noStackWith, []);
+  assert.ok((await get(rwB, 3)).code);                                                     // everything allowed again
+
+  // with stacking switched off the grid is ignored (Shopify keeps it to one code at a time)
+  await STK.saveStackRules(store.id, pairs([rwC, rwC]));
+  await prisma.storeSettings.update({ where: { storeId: store.id }, data: { allowStackedCodes: false } });
+  assert.ok((await get(rwA, 3)).code);
+  assert.ok((await get(rwB, 4)).code);
+  await STK.clearStackRules(store.id);
+  await prisma.reward.updateMany({ where: { storeId: store.id }, data: { active: true } });
+  ok("reward combinations: per-pair choices are enforced at redeem (incl. same-twice), a used code frees the slot, retries and the off switch are unaffected");
 
   // ---- analytics
   await postTransaction({ storeId: store.id, customerId: dana.id, type: "ADJUST", points: 10, source: "manual", idempotencyKey: "an1" });

@@ -128,3 +128,15 @@ tied to a Shopify login. **Shiprocket's own spec isn't public** — this is our 
 enables it (the setup card has a ready-to-send message) and may ask for different field names, which are all in
 `app/services/fastcheckout.server.js`.
 
+
+## Email brand and reward codes
+
+- **Emails → Sending settings → Your brand**: logo (https link; "fills the whole header" for a banner image), brand colour, corner radius,
+  header/button/footer colours, footer title and text (`{email}` = reply-to address or store email). Emails you haven't customised use it;
+  customised ones keep their own design. Stored in `StoreSettings.emailBrand`.
+- **Rules → Reward codes in one order**: by default a reward code can't be combined with another reward code (or other order
+  discounts); "Allow several codes together" creates new codes with Shopify's combine options switched on.
+
+**Choosing which reward codes can be held together** (Rules → "Using several reward codes together", when stacking is on): a grid of
+every pair of rewards, all ticked by default. Shopify can't name specific codes, so this is enforced when a code is issued: a customer
+can't redeem a reward that is unticked against one of their unused codes (`Reward.noStackWith`, `app/services/stacking.server.js`).

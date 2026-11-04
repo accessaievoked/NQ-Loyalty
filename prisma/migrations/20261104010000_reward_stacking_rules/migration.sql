@@ -1,0 +1,1 @@
+ALTER TABLE "Reward" ADD COLUMN "noStackWith" TEXT[] DEFAULT ARRAY[]::TEXT[];

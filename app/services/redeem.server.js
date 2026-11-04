@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import prisma from "../db.server.js";
 import { postTransaction, InsufficientPointsError } from "./ledger.server.js";
 import { notifyCustomer } from "./notify.server.js";
+import { assertCanHold } from "./stacking.server.js";
 
 export class RedeemError extends Error {
   constructor(message, status = 400) {
@@ -49,7 +50,7 @@ export function priceRedemption(reward, requestedPoints) {
   return { points, amount, name: `${reward.name} (${points} points)` };
 }
 
-async function createShopifyDiscount(admin, { reward, code, customer, endsAt, amount, anyCustomer }) {
+async function createShopifyDiscount(admin, { reward, code, customer, endsAt, amount, anyCustomer, stack }) {
   const common = {
     title: `Loyalty: ${reward.name} (${code})`,
     code,
@@ -71,7 +72,9 @@ async function createShopifyDiscount(admin, { reward, code, customer, endsAt, am
   if (reward.type === "FREE_SHIPPING") {
     query = CREATE_SHIPPING;
     path = "discountCodeFreeShippingCreate";
-    input = { ...common, destination: { all: true }, combinesWith: { productDiscounts: true, orderDiscounts: true } };
+    // One code at a time: combines with product/order discounts but not with another shipping code.
+    // Stacking on: it may sit alongside other shipping discounts too.
+    input = { ...common, destination: { all: true }, combinesWith: { productDiscounts: true, orderDiscounts: true, ...(stack ? { shippingDiscounts: true } : {}) } };
   } else {
     query = CREATE_BASIC;
     path = "discountCodeBasicCreate";
@@ -79,7 +82,9 @@ async function createShopifyDiscount(admin, { reward, code, customer, endsAt, am
       reward.type === "PERCENTAGE"
         ? { percentage: Math.min(1, Number(reward.value) / 100) }
         : { discountAmount: { amount: Number(amount).toFixed(2), appliesOnEachItem: false } };
-    input = { ...common, customerGets: { value, items: { all: true } }, combinesWith: { shippingDiscounts: true } };
+    // One code at a time: it only combines with shipping discounts, so Shopify won't let a second
+    // reward code (or another order discount) be applied next to it. Stacking on: it combines with all.
+    input = { ...common, customerGets: { value, items: { all: true } }, combinesWith: stack ? { productDiscounts: true, orderDiscounts: true, shippingDiscounts: true } : { shippingDiscounts: true } };
   }
 
   const res = await admin.graphql(query, { variables: { input } });
@@ -119,6 +124,8 @@ export async function redeemReward({ store, admin, customerId, rewardId, request
   ]);
   if (!customer) throw new RedeemError("Customer not found", 404);
   if (!reward) throw new RedeemError("Reward is not available", 404);
+  // Several codes allowed: still refuse one the merchant has said can't be held with an unused code.
+  if (settings?.allowStackedCodes) await assertCanHold({ storeId: store.id, customerId, reward });
   const priced = priceRedemption(reward, requestedPoints);
   const minimum = Math.max(priced.points, settings?.minRedeemPoints ?? 0);
   if (customer.pointsBalance < minimum) throw new RedeemError("Not enough points");
@@ -174,12 +181,12 @@ export async function redeemReward({ store, admin, customerId, rewardId, request
   }
 
   if (redemption.existing) return redemption.existing; // replayed request
-  return finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced, anyCustomer });
+  return finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced, anyCustomer, stack: !!settings?.allowStackedCodes });
 }
 
-async function finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced, anyCustomer }) {
+async function finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced, anyCustomer, stack }) {
   try {
-    const shopifyDiscountId = await createShopifyDiscount(admin, { reward, code, customer, endsAt, amount: priced.amount, anyCustomer });
+    const shopifyDiscountId = await createShopifyDiscount(admin, { reward, code, customer, endsAt, amount: priced.amount, anyCustomer, stack });
     const done = await prisma.redemption.update({
       where: { id: redemptionId },
       data: { status: "ACTIVE", shopifyDiscountId },
