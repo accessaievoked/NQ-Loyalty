@@ -643,6 +643,60 @@ try {
   assert.equal(EM.normalizeEmailTemplate("redeemed", { theme: { rowGap: "x" } }).theme.rowGap, "");
   ok("emails: 15 designs render for all four emails; theme-wide exact spacing applies, per-block spacing overrides it, bad values are clamped");
 
+  // ---- fast checkout (Shiprocket): phone lookup + redeem → a code the checkout can apply
+  const FC = await import("../app/services/fastcheckout.server.js");
+  await reload();
+  assert.equal(FC.phoneKey("+91 88006-37327"), "8800637327");
+  assert.equal(FC.phoneKey("08800637327"), "8800637327");
+  assert.equal(FC.phoneKey("12345"), null);
+  await assert.rejects(() => FC.saveFastCheckout(store, { logoUrl: "http://insecure.test/l.png" }), /https/);
+  const fcInt = await FC.saveFastCheckout(store, { heading: "Use Claura points", logoUrl: "https://x.test/l.png", allowedIps: "1.2.3.4, bad ip!, 5.6.7.8, ::1" });
+  assert.deepEqual([fcInt.enabled, fcInt.config.allowedIps], [true, ["1.2.3.4", "5.6.7.8", "::1"]]);
+  const fcUrl = (path) => `https://app.test/integrations/shiprocket/${store.id}/${path}`;
+  const fcReq = (headers) => new Request(fcUrl("lookup"), { method: "POST", headers });
+  const denied = async (req) => (await FC.authenticateFastCheckout(req, store.id, "lookup")) instanceof Response;
+  assert.ok(await denied(fcReq({ "x-forwarded-for": "1.2.3.4" })));                          // no key
+  assert.ok(await denied(fcReq({ "x-api-key": "wrong", "x-forwarded-for": "1.2.3.4" })));     // wrong key
+  assert.ok(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "9.9.9.9" })));  // right key, wrong IP
+  const authed = await FC.authenticateFastCheckout(fcReq({ authorization: `Bearer ${fcInt.webhookToken}`, "x-forwarded-for": "5.6.7.8" }), store.id, "lookup");
+  assert.ok(!(authed instanceof Response) && authed.store.id === store.id);
+  assert.ok((await FC.authenticateFastCheckout(fcReq({ "x-api-key": fcInt.webhookToken }), "some-other-store", "lookup")) instanceof Response);
+
+  const fcRew = await prisma.reward.create({ data: { storeId: store.id, name: "FC fixed", type: "FIXED_AMOUNT", value: 5, pointsCost: 500 } });
+  const fcCust = await upsertCustomer(store.id, { shopifyCustomerId: "7001", email: "fc@import.test", emailVerified: true, phone: "+918800637327", firstName: "Manan" });
+  await postTransaction({ storeId: store.id, customerId: fcCust.id, type: "ADJUST", points: 800, source: "manual", idempotencyKey: "fc-seed" });
+  const fcBal = (await prisma.customer.findUnique({ where: { id: fcCust.id } })).pointsBalance;
+  const found = await FC.lookupForCheckout(store, fcInt, { phone: "088006 37327" });          // another way of writing the same number
+  assert.deepEqual([found.found, found.customer.points, found.customer.firstName, found.display.heading], [true, fcBal, "Manan", "Use Claura points"]);
+  const offer = found.offers.find((o) => o.id === fcRew.id);
+  assert.deepEqual([offer.affordable, offer.pointsCost, offer.value], [true, 500, 5]);
+  assert.equal((await FC.lookupForCheckout(store, fcInt, { phone: "9999999999" })).found, false);
+  assert.equal((await FC.lookupForCheckout(store, fcInt, { email: "FC@import.test" })).found, true);
+  assert.equal((await FC.lookupForCheckout(store, fcInt, { email: "fc@import.test", phone: "9999999999" })).found, true);  // email alone decides when the phone is unknown
+  const twin = await upsertCustomer(store.id, { shopifyCustomerId: "7002", email: "fc2@import.test", emailVerified: true, phone: "8800637327" });  // same phone on a second account
+  assert.equal((await FC.lookupForCheckout(store, fcInt, { phone: "8800637327" })).found, false);                // ambiguous → never guess
+  assert.equal((await FC.lookupForCheckout(store, fcInt, { phone: "8800637327", email: "fc@import.test" })).found, true);
+  await prisma.customer.update({ where: { id: twin.id }, data: { phone: null } });
+
+  let fcSent;
+  const fcAdmin = { graphql: async (_q, { variables }) => { fcSent = variables.input; return { json: async () => ({ data: { discountCodeBasicCreate: { codeDiscountNode: { id: "gid://shopify/DiscountCodeNode/77" }, userErrors: [] } } }) }; } };
+  const fcRedeem = (extra = {}) => FC.redeemForCheckout({ store, admin: fcAdmin, contact: { phone: "8800637327" }, rewardId: fcRew.id, requestId: "sr-attempt-0001", ...extra });
+  await assert.rejects(() => fcRedeem({ requestId: "x" }), /requestId/);
+  await assert.rejects(() => FC.redeemForCheckout({ store, admin: fcAdmin, contact: { phone: "9999999999" }, rewardId: fcRew.id, requestId: "sr-attempt-0002" }), /No rewards account/);
+  const red1 = await fcRedeem();
+  assert.ok(/^LOY-/.test(red1.code) && red1.pointsSpent === 500 && red1.discountAmount === 5 && red1.balance === fcBal - 500);
+  assert.deepEqual(fcSent.customerSelection, { all: true });                                  // not tied to a Shopify login: the checkout makes the order itself
+  assert.equal(fcSent.usageLimit, 1);
+  const red2 = await fcRedeem();                                                              // a retry with the same id: same code, no second charge
+  assert.deepEqual([red2.code, red2.balance], [red1.code, fcBal - 500]);
+  await assert.rejects(() => fcRedeem({ requestId: "sr-attempt-0003", rewardId: "nope" }), /not available/);
+  await prisma.reward.update({ where: { id: fcRew.id }, data: { pointsCost: 5000 } });
+  await assert.rejects(() => fcRedeem({ requestId: "sr-attempt-0004" }), /Not enough points/);
+  assert.equal((await FC.lookupForCheckout(store, fcInt, { phone: "8800637327" })).offers.find((o) => o.id === fcRew.id).affordable, false);
+  await FC.disableFastCheckout(store.id);
+  assert.ok(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "5.6.7.8" })));  // switched off → locked
+  ok("fast checkout: key + IP checked, phone lookup (formats, ambiguity), redeem returns a single-use code once per requestId, unaffordable/unknown rejected");
+
   // ---- analytics
   await postTransaction({ storeId: store.id, customerId: dana.id, type: "ADJUST", points: 10, source: "manual", idempotencyKey: "an1" });
   const a = await loadAnalytics(store, 30);

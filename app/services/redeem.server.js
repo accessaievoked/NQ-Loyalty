@@ -49,7 +49,7 @@ export function priceRedemption(reward, requestedPoints) {
   return { points, amount, name: `${reward.name} (${points} points)` };
 }
 
-async function createShopifyDiscount(admin, { reward, code, customer, endsAt, amount }) {
+async function createShopifyDiscount(admin, { reward, code, customer, endsAt, amount, anyCustomer }) {
   const common = {
     title: `Loyalty: ${reward.name} (${code})`,
     code,
@@ -57,7 +57,7 @@ async function createShopifyDiscount(admin, { reward, code, customer, endsAt, am
     endsAt: endsAt ? endsAt.toISOString() : null,
     // Tied to the Shopify customer when we know them. Email-login members who don't have a store
     // account yet get an unrestricted code — still single-use and unguessable.
-    customerSelection: customer.shopifyCustomerId
+    customerSelection: customer.shopifyCustomerId && !anyCustomer
       ? { customers: { add: [`gid://shopify/Customer/${customer.shopifyCustomerId}`] } }
       : { all: true },
     usageLimit: 1,
@@ -97,7 +97,9 @@ async function createShopifyDiscount(admin, { reward, code, customer, endsAt, am
  * *before* anything is created in Shopify; if Shopify fails the points are refunded through
  * the ledger. `requestId` makes the call idempotent (double-clicks, retries).
  */
-export async function redeemReward({ store, admin, customerId, rewardId, requestId, points: requestedPoints }) {
+// `anyCustomer`: don't lock the code to the Shopify customer (fast-checkout apps create the order
+// themselves, so Shopify may not see who is buying). Still single-use and unguessable.
+export async function redeemReward({ store, admin, customerId, rewardId, requestId, points: requestedPoints, anyCustomer = false }) {
   if (!requestId) throw new RedeemError("Missing request id");
 
   // A repeated request (double click, network retry) gets the original result back, even though
@@ -172,12 +174,12 @@ export async function redeemReward({ store, admin, customerId, rewardId, request
   }
 
   if (redemption.existing) return redemption.existing; // replayed request
-  return finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced });
+  return finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced, anyCustomer });
 }
 
-async function finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced }) {
+async function finishRedemption({ store, admin, redemptionId, reward, customer, code, endsAt, priced, anyCustomer }) {
   try {
-    const shopifyDiscountId = await createShopifyDiscount(admin, { reward, code, customer, endsAt, amount: priced.amount });
+    const shopifyDiscountId = await createShopifyDiscount(admin, { reward, code, customer, endsAt, amount: priced.amount, anyCustomer });
     const done = await prisma.redemption.update({
       where: { id: redemptionId },
       data: { status: "ACTIVE", shopifyDiscountId },

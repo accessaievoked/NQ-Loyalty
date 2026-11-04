@@ -3,6 +3,7 @@ import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { requireStore } from "../services/auth.server";
 import { connectJudgeMe, disconnect, getIntegration, syncJudgeMe } from "../services/integrations.server";
+import { disableFastCheckout, getFastCheckout, saveFastCheckout } from "../services/fastcheckout.server";
 import db from "../db.server";
 import BackButton from "../components/BackButton";
 
@@ -37,10 +38,11 @@ const int = (v, min, max, fallback = 0) => {
 
 export const loader = async ({ request }) => {
   const { store } = await requireStore(request);
-  const [rules, rewards, jm] = await Promise.all([
+  const [rules, rewards, jm, fast] = await Promise.all([
     db.earnRule.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "asc" } }),
     db.reward.findMany({ where: { storeId: store.id }, orderBy: { pointsCost: "asc" }, include: { _count: { select: { redemptions: true } } } }),
     getIntegration(store.id, "JUDGEME"),
+    getFastCheckout(store.id),
   ]);
   const s = store.settings;
   return {
@@ -52,6 +54,15 @@ export const loader = async ({ request }) => {
       maxPoints: r.maxPoints ?? 0, minOrderAmount: Number(r.minOrderAmount), codeValidDays: r.codeValidDays, active: r.active,
       redemptions: r._count.redemptions,
     })),
+    fastCheckout: {
+      enabled: !!fast?.enabled,
+      key: fast?.enabled ? fast.webhookToken : "",
+      base: `${(process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "")}/integrations/shiprocket/${store.id}`,
+      heading: fast?.config?.heading || "Use your points",
+      logoUrl: fast?.config?.logoUrl || "",
+      ips: (fast?.config?.allowedIps || []).join(", "),
+      lastEvent: fast?.lastEventAt ? new Date(fast.lastEventAt).toISOString().slice(0, 16).replace("T", " ") + " UTC" : null,
+    },
     judgeme: {
       connected: !!(jm?.enabled && jm?.secretEnc),
       minRating: jm?.config?.minRating ?? 4,
@@ -138,6 +149,21 @@ export const action = async ({ request }) => {
       // Redemptions keep a snapshot of the reward name, so history survives deletion.
       await db.reward.deleteMany({ where: { id, storeId: store.id } });
       return { ok: "Removed" };
+    }
+
+    // ---- fast checkout (Shiprocket)
+    if (intent === "fast-save" || intent === "fast-rotate") {
+      await saveFastCheckout(store, {
+        heading: f.get("heading"),
+        logoUrl: f.get("logoUrl"),
+        allowedIps: f.get("allowedIps"),
+        regenerateKey: intent === "fast-rotate",
+      });
+      return { ok: intent === "fast-rotate" ? "New key created — the old one no longer works" : "Saved" };
+    }
+    if (intent === "fast-off") {
+      await disableFastCheckout(store.id);
+      return { ok: "Fast checkout redemption turned off" };
     }
 
     // ---- Judge.me (review points)
@@ -420,6 +446,72 @@ function PresetGallery({ items, existing, singleton, onAdd, busy }) {
   );
 }
 
+function FastCheckout({ fc }) {
+  const fetcher = useFetcher();
+  useToast(fetcher);
+  const busy = fetcher.state !== "idle" || undefined;
+  const send = (intent) => fetcher.submit({ intent, heading: fc.heading, logoUrl: fc.logoUrl, allowedIps: fc.ips }, { method: "post" });
+  const brief = `Hi Shiprocket Checkout team,
+
+Please enable loyalty-points redemption on our checkout using our loyalty app's API.
+
+Lookup (POST): ${fc.base}/lookup   body: {"phone": "<verified phone>", "email": "<optional>"}
+Redeem (POST): ${fc.base}/redeem   body: {"phone": "...", "rewardId": "<offer id>", "points": <only for custom amounts>, "requestId": "<unique per attempt>"}
+Auth: header  x-api-key: ${fc.key || "<secret key>"}
+The redeem call returns a single-use Shopify discount code (and its value) to apply to the order.`;
+  return (
+    <s-stack gap="base">
+      <s-stack direction="inline" gap="small" alignItems="center">
+        <s-badge tone={fc.enabled ? "success" : "neutral"}>{fc.enabled ? "On" : "Off"}</s-badge>
+        {fc.enabled && fc.lastEvent && <s-text color="subdued">Last request {fc.lastEvent}</s-text>}
+      </s-stack>
+      <s-paragraph>
+        Fast-checkout apps like Shiprocket Checkout (fastrr) replace the Shopify checkout page, so the widget and a pasted code can&apos;t run there.
+        Instead, their server asks us if the shopper (identified by the phone number they just verified) has points, shows your offers, and applies
+        the discount code we create when they redeem. Turn this on, then send the details below to Shiprocket&apos;s checkout support — they enable it on their side.
+      </s-paragraph>
+      <fetcher.Form method="post">
+        <input type="hidden" name="intent" value="fast-save" />
+        <s-stack gap="base">
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(220px, 1fr))" gap="base">
+            <s-text-field label="Heading shown at checkout" name="heading" value={fc.heading} details="For example “Use your Claura points”" />
+            <s-text-field label="Logo link (https)" name="logoUrl" value={fc.logoUrl} placeholder="https://…/logo.png" />
+          </s-grid>
+          <s-text-field
+            label="Only accept requests from these IP addresses (optional)"
+            name="allowedIps"
+            value={fc.ips}
+            details="Comma separated. Leave empty to rely on the secret key alone; add Shiprocket's server IPs once they share them."
+          />
+          <s-stack direction="inline" gap="small">
+            <s-button type="submit" variant="primary" loading={busy}>{fc.enabled ? "Save" : "Turn on"}</s-button>
+            {fc.enabled && (
+              <>
+                <s-button onClick={() => send("fast-rotate")} loading={busy}>Make a new key</s-button>
+                <s-button tone="critical" variant="tertiary" onClick={() => send("fast-off")}>Turn off</s-button>
+              </>
+            )}
+          </s-stack>
+        </s-stack>
+      </fetcher.Form>
+
+      {fc.enabled && (
+        <s-stack gap="small">
+          <s-heading>Send this to Shiprocket</s-heading>
+          <s-text-field label="Secret key (keep private)" value={fc.key} readOnly />
+          <s-text-field label="Lookup URL" value={`${fc.base}/lookup`} readOnly />
+          <s-text-field label="Redeem URL" value={`${fc.base}/redeem`} readOnly />
+          <s-text-area label="Ready-to-send message" value={brief} rows={9} readOnly />
+        </s-stack>
+      )}
+      <s-text color="subdued">
+        Codes made this way are single-use, can&apos;t be guessed, and aren&apos;t tied to a Shopify login, because the fast checkout creates the order itself.
+        Every redemption appears in the customer&apos;s history like any other.
+      </s-text>
+    </s-stack>
+  );
+}
+
 function JudgeMe({ jm, reviewRuleActive }) {
   const fetcher = useFetcher();
   useToast(fetcher);
@@ -467,7 +559,7 @@ function JudgeMe({ jm, reviewRuleActive }) {
 // ---- the page --------------------------------------------------------------------------------------
 
 export default function Rules() {
-  const { settings, rules, rewards, currency, judgeme } = useLoaderData();
+  const { settings, rules, rewards, currency, judgeme, fastCheckout } = useLoaderData();
   const money = useMoney(currency);
   const settingsFetcher = useFetcher();
   const adder = useFetcher();
@@ -540,6 +632,10 @@ export default function Rules() {
           <s-heading>Add a way to spend</s-heading>
           <PresetGallery items={p.redeem} existing={rewards} onAdd={addReward} busy={adder.state !== "idle"} />
         </s-stack>
+      </s-section>
+
+      <s-section heading="Fast checkout (Shiprocket)">
+        <FastCheckout fc={fastCheckout} />
       </s-section>
 
       <s-section heading="Review points (Judge.me)">

@@ -114,3 +114,17 @@ Customers → **Import customers**:
 15 ready-made designs (Emails → Design). Spacing is exact: the theme sets side spacing and an optional row spacing for every
 row, and each block can override space above/below/sides. Every slider has a box for typing the exact pixel value.
 
+## Fast checkout (Shiprocket Checkout / fastrr)
+
+Fast-checkout apps replace Shopify's checkout, so the widget and pasted codes can't run there. Rules → **Fast checkout** turns on a
+server-to-server API that their checkout calls after it has verified the shopper's phone:
+
+- `POST /integrations/shiprocket/:storeId/lookup` `{ phone?, email? }` → `{ found, customer: { firstName, points }, canRedeem, offers[], currency, display }`
+- `POST /integrations/shiprocket/:storeId/redeem` `{ phone?, email?, rewardId, points?, requestId }` → `{ ok, code, pointsSpent, discountAmount, balance, … }`
+
+Auth: the store's secret key in `x-api-key` (or `Authorization: Bearer`), optionally restricted to Shiprocket's IPs. Phones match on
+their last 10 digits; a phone shared by two accounts matches nobody. `requestId` makes retries safe. The code is single-use and not
+tied to a Shopify login. **Shiprocket's own spec isn't public** — this is our side of the contract; Shiprocket's checkout team
+enables it (the setup card has a ready-to-send message) and may ask for different field names, which are all in
+`app/services/fastcheckout.server.js`.
+
