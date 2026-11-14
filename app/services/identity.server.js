@@ -25,6 +25,10 @@ const OTP_TTL_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const SENDS_PER_EMAIL = 3; // per 15 minutes
 const SENDS_PER_STORE_HOUR = 300;
+
+// Past the store-wide hourly cap only strangers are turned away. Someone spraying random addresses
+// can burn the cap, but must not be able to lock out the people who already have an account here.
+export const otpHourlyBlocked = (hourlyCount, isKnownEmail) => hourlyCount >= SENDS_PER_STORE_HOUR && !isKnownEmail;
 export const SESSION_DAYS = 30;
 
 export function normalizeEmail(raw) {
@@ -45,7 +49,10 @@ export async function requestOtp({ store, email: rawEmail }) {
     prisma.otpChallenge.count({ where: { storeId: store.id, createdAt: { gt: new Date(now - 3600000) } } }),
   ]);
   if (recent >= SENDS_PER_EMAIL) throw new IdentityError("Too many codes requested. Please wait a few minutes.", 429);
-  if (hourly >= SENDS_PER_STORE_HOUR) throw new IdentityError("Please try again later", 429);
+  if (hourly >= SENDS_PER_STORE_HOUR) {
+    const known = !!(await prisma.customer.findFirst({ where: { storeId: store.id, email }, select: { id: true } }));
+    if (otpHourlyBlocked(hourly, known)) throw new IdentityError("Please try again later", 429);
+  }
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const challenge = await prisma.otpChallenge.create({

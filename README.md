@@ -140,3 +140,15 @@ enables it (the setup card has a ready-to-send message) and may ask for differen
 **Choosing which reward codes can be held together** (Rules → "Using several reward codes together", when stacking is on): a grid of
 every pair of rewards, all ticked by default. Shopify can't name specific codes, so this is enforced when a code is issued: a customer
 can't redeem a reward that is unticked against one of their unused codes (`Reward.noStackWith`, `app/services/stacking.server.js`).
+
+## How points, refunds and accounts work (after the review fixes)
+
+- **Order amount.** Points come from the order's `subtotal_price` (after discounts, before shipping/tax) as it was at checkout. Never
+  `current_subtotal_price`, which already has refunds taken off. Order edits after checkout don't change points.
+- **Refunds.** Refunded amount is tracked on the order; the share still kept is `1 − refunded ÷ order amount`. Before release the award is
+  just credited at that share. After release, points are reversed down to `floor(award × kept share)`, measured against what was actually
+  credited, minus what's already been reversed. A cancel or a completed return takes back whatever remains. Replays do nothing.
+- **Accounts.** One account per Shopify customer per store. An email-code (or imported) account is merged into a Shopify customer only when
+  Shopify itself reports that customer's email as verified. Otherwise the Shopify customer gets a separate account without that email.
+- **Fast-checkout IP list** needs `TRUSTED_IP_HEADER` (see `.env.example`); without it the list can't be saved and requests are refused.
+- **Tests:** `npm run test:unit` (no database) and `npm run test:smoke` (needs the database).

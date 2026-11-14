@@ -99,6 +99,38 @@ try {
   assert.equal(await prisma.pointsAward.count({ where: { order: { shopifyOrderId: "1003" } } }), 1);
   ok("FULFILLED trigger: no points when paid, credited once fulfilled");
 
+  // refunds are counted once: Shopify's current_subtotal_price already has refunds taken off, so the
+  // order amount must come from subtotal_price or every refund would be subtracted twice
+  {
+    const start = await balance(c.id);
+    const mine = () => prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "2001" } });
+    await handleOrderEvent(f2, "orders/paid", order(2001, { subtotal_price: "1000.00", current_subtotal_price: "1000.00" }));
+    assert.equal(await balance(c.id), start);                                                  // earns on fulfilment, nothing yet
+    await handleRefund(store, { id: 6001, order_id: 2001, refund_line_items: [{ subtotal: "500.00" }] });  // ₹500 back before it ships
+    await handleOrderEvent(f2, "orders/fulfilled", order(2001, { subtotal_price: "1000.00", current_subtotal_price: "500.00", updated_at: new Date().toISOString() }));
+    assert.equal(Number((await mine()).eligibleAmount), 1000);                                 // not lowered to the post-refund 500
+    assert.equal(await balance(c.id), start + 1000);                                           // half of 2000 points (the old code gave 0)
+    await handleRefund(store, { id: 6002, order_id: 2001, refund_line_items: [{ subtotal: "100.00" }] });
+    assert.equal(await balance(c.id), start + 800);                                            // 40% kept: a further 10% reversed, not 60% or 100%
+    await handleRefund(store, { id: 6002, order_id: 2001, refund_line_items: [{ subtotal: "100.00" }] });  // replay
+    assert.equal(await balance(c.id), start + 800);
+    await handleOrderEvent(f2, "orders/cancelled", order(2001, { subtotal_price: "1000.00", current_subtotal_price: "400.00", cancelled_at: new Date().toISOString() }));
+    assert.equal(await balance(c.id), start);                                                  // back to exactly zero for this order, never below
+    await handleOrderEvent(f2, "orders/cancelled", order(2001, { subtotal_price: "1000.00", cancelled_at: new Date().toISOString() }));  // replay
+    assert.equal(await balance(c.id), start);
+    ok("refunds counted once: refund→fulfil→refund→cancel keeps 50%, then 40%, then exactly 0 (no double count, no negative)");
+
+    // refund AFTER release when a refund had already lowered the credit: reversal measured against what was credited
+    const start2 = await balance(c.id);
+    await handleOrderEvent(f2, "orders/paid", order(2002, { subtotal_price: "1000.00", current_subtotal_price: "1000.00" }));
+    await handleRefund(store, { id: 6101, order_id: 2002, refund_line_items: [{ subtotal: "500.00" }] });
+    await handleOrderEvent(f2, "orders/fulfilled", order(2002, { subtotal_price: "1000.00", current_subtotal_price: "500.00", updated_at: new Date().toISOString() }));
+    assert.equal(await balance(c.id), start2 + 1000);
+    await handleRefund(store, { id: 6102, order_id: 2002, refund_line_items: [{ subtotal: "500.00" }] });      // everything refunded
+    assert.equal(await balance(c.id), start2);                                                 // 1000 credited, 1000 taken back: not -1000
+    ok("a full refund after a part-refunded release takes back exactly what was credited");
+  }
+
   // trigger = DELIVERED via fulfillment event
   await prisma.storeSettings.update({ where: { storeId: store.id }, data: { earnTrigger: "DELIVERED" } });
   const f3 = await prisma.store.findUnique({ where: { id: store.id }, include: { settings: true } });
@@ -127,7 +159,9 @@ try {
   const mid = await balance(c.id);
   await assert.rejects(redeemReward({ store: f3, admin: failing, customerId: c.id, rewardId: reward.id, requestId: "req-2" }), RedeemError);
   assert.equal(await balance(c.id), mid);
-  ok("Shopify failure refunded the points");
+  const refundTx = await prisma.pointsTransaction.findFirst({ where: { storeId: store.id, idempotencyKey: { startsWith: "redeem-refund:" } }, orderBy: { createdAt: "desc" } });
+  assert.ok(refundTx.expiresAt && refundTx.expiresAt.getTime() > Date.now() + 29 * 86400000 && refundTx.expiresAt.getTime() < Date.now() + 31 * 86400000);  // the refund expires like any other points (30 days here), not never
+  ok("Shopify failure refunded the points, with the store's normal expiry (not permanent)");
 
   // custom-amount reward (Flits-style): 100 points = $1, min 100, max 500
   const custom = await prisma.reward.create({

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import prisma from "../db.server.js";
-import { postTransaction, InsufficientPointsError } from "./ledger.server.js";
+import { postTransaction, InsufficientPointsError, expiryDate } from "./ledger.server.js";
 import { notifyCustomer } from "./notify.server.js";
 import { assertCanHold } from "./stacking.server.js";
 
@@ -211,11 +211,15 @@ export async function failRedemption(redemptionId, reason = "failed") {
   const r = await prisma.redemption.findUnique({ where: { id: redemptionId } });
   if (!r || r.status === "FAILED") return;
   await prisma.redemption.update({ where: { id: redemptionId }, data: { status: "FAILED" } });
+  // The refund is a new credit, so give it the store's normal expiry: otherwise points that were
+  // about to expire would come back as permanent ones.
+  const settings = await prisma.storeSettings.findUnique({ where: { storeId: r.storeId }, select: { expiryDays: true } });
   await postTransaction({
     storeId: r.storeId,
     customerId: r.customerId,
     type: "REVERSAL",
     points: r.points,
+    expiresAt: expiryDate(settings?.expiryDays ?? 0),
     idempotencyKey: `redeem-refund:${redemptionId}`,
     redemptionId,
     note: `Redemption failed: ${r.rewardName}`,

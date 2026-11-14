@@ -22,9 +22,13 @@ export function computePurchasePoints(rules, amount) {
   return total;
 }
 
-// Merchandise value that earns points: after discounts, before shipping and tax.
+// Merchandise value that earns points: after discounts, before shipping and tax, as it was when
+// the order was placed. Deliberately `subtotal_price`, never `current_subtotal_price`: the current
+// one already has refunds (and edits) taken off, and refunds are subtracted separately in
+// `keep` below, so using it would count every refund twice. Order edits after checkout therefore
+// don't change the points (a decision: points follow what the customer originally bought).
 function eligibleAmountOf(order) {
-  return money(order.current_subtotal_price ?? order.subtotal_price);
+  return money(order.subtotal_price);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -177,8 +181,7 @@ export async function handleRefund(store, payload) {
     return;
   }
   if (award.status === "RELEASED") {
-    const target = award.points - Math.floor(award.points * keep);
-    await reverseDelta(store, award, target, `refund:${payload.id}`, `Refund on ${updated.orderName ?? "order"}`);
+    await reverseOrderPoints(store, award, keep, `refund:${payload.id}`, `Refund on ${updated.orderName ?? "order"}`);
     if (keep === 0) await reverseReferralForOrder(order.id);
   }
 }
@@ -190,18 +193,34 @@ export async function cancelOrderPoints(store, order, label = "Cancelled") {
   if (award.status === "PENDING") {
     await prisma.pointsAward.updateMany({ where: { id: award.id, status: "PENDING" }, data: { status: "CANCELLED" } });
   } else if (award.status === "RELEASED") {
-    await reverseDelta(store, award, award.points, `cancel:${order.id}`, `${label} ${order.orderName ?? "order"}`);
+    await reverseOrderPoints(store, award, 0, `cancel:${order.id}`, `${label} ${order.orderName ?? "order"}`);
     await reverseReferralForOrder(order.id);
   }
 }
 
-// Reverse up to `targetTotal` points for this order, minus whatever was reversed already.
-async function reverseDelta(store, award, targetTotal, key, note) {
+// What was actually credited for this award. It can be less than `award.points`: a refund that
+// happened while the points were on hold lowered the credit at release time.
+async function creditedFor(store, award) {
+  const earn = await prisma.pointsTransaction.findUnique({
+    where: { storeId_idempotencyKey: { storeId: store.id, idempotencyKey: `award:${award.id}` } },
+    select: { points: true },
+  });
+  return Math.max(0, earn?.points ?? 0);
+}
+
+// Bring the points kept for this order down to `keepFraction` (0..1) of the full award, never taking
+// back more than was credited. Whatever was reversed before counts, so every call is a top-up.
+//   refund → keepFraction = what is left of the order after refunds
+//   cancel / returned → keepFraction = 0 (everything credited is taken back, exactly once)
+async function reverseOrderPoints(store, award, keepFraction, key, note) {
+  const credited = await creditedFor(store, award);
+  const shouldRemain = Math.floor(award.points * keepFraction);
+  const totalToReverse = Math.max(0, credited - shouldRemain);
   const done = await prisma.pointsTransaction.aggregate({
     where: { customerId: award.customerId, orderId: award.orderId, type: "REVERSAL", points: { lt: 0 } },
     _sum: { points: true },
   });
-  const delta = Math.min(targetTotal, award.points) - Math.abs(done._sum.points ?? 0);
+  const delta = totalToReverse - Math.abs(done._sum.points ?? 0);
   if (delta <= 0) return;
   await postTransaction({
     storeId: store.id,

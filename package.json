@@ -11,6 +11,8 @@
     "env": "shopify app env",
     "start": "react-router-serve ./build/server/index.js",
     "worker": "node worker/index.js",
+    "test:unit": "node --test scripts/unit.test.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs && node scripts/smoke-test-features.mjs",
     "redis": "docker compose up -d redis",
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",

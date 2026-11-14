@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import prisma from "../db.server.js";
 import { postTransaction } from "./ledger.server.js";
 import { creditPoints } from "./credit.server.js";
+import { phoneKey } from "../lib/phone.js";
 
 // Referral rules
 //  - Every member has one shareable code.
@@ -92,7 +93,8 @@ export async function applyReferralCode({ store, customer, code: rawCode }) {
     where: { storeId_referralCode: { storeId: store.id, referralCode: code } },
   });
   if (!referrer) throw new ReferralError("We couldn't find that code");
-  if (referrer.id === customer.id || (referrer.email && referrer.email === customer.email)) {
+  const samePhone = phoneKey(referrer.phone) && phoneKey(referrer.phone) === phoneKey(customer.phone);
+  if (referrer.id === customer.id || (referrer.email && referrer.email === customer.email) || samePhone) {
     throw new ReferralError("You can't use your own code");
   }
   if (await prisma.referral.findUnique({ where: { refereeId: customer.id } })) {

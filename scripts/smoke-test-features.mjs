@@ -93,13 +93,27 @@ try {
   await assert.rejects(requestOtp({ store, email: "not-an-email" }), IdentityError);
   ok("sending codes is rate-limited per email; invalid emails are rejected");
 
-  // ---- identity merge: OTP account later appears in Shopify with the same email
-  const adopted = await upsertCustomer(store.id, { shopifyCustomerId: "9001", email, emailVerified: false, firstName: "Otto" });
+  // ---- identity merge. An email-code account has proven its owner controls the inbox. A Shopify customer
+  // who registers with that email has proven nothing unless Shopify itself says the email is verified.
+  const aliceBefore = await prisma.customer.findUnique({ where: { id: v.customer.id } });
+  assert.equal(aliceBefore.shopifyCustomerId, null);
+  const mallory = await upsertCustomer(store.id, { shopifyCustomerId: "8999", email, emailVerified: false, firstName: "Mallory" });
+  assert.notEqual(mallory.id, v.customer.id);                                               // NOT merged: a separate account…
+  assert.equal(mallory.email, null);                                                       // …without Alice's email
+  assert.equal((await prisma.customer.findUnique({ where: { id: v.customer.id } })).shopifyCustomerId, null);  // Alice's account is still unlinked
+  assert.equal(await bal(v.customer.id), 25);                                              // her points untouched
+  assert.notEqual(await bal(mallory.id), 25 + 1000);                                       // and Mallory can't see them
+  const malloryAgain = await upsertCustomer(store.id, { shopifyCustomerId: "8999", email, emailVerified: false });  // webhook replay / update
+  assert.deepEqual([malloryAgain.id, malloryAgain.email], [mallory.id, null]);                           // the email is never written onto a clashing account
+  assert.equal(await prisma.customer.count({ where: { storeId: store.id, email } }), 1);   // still exactly one account holds it
+  // Shopify verified the email for the customer (they confirmed it): now it IS the same person.
+  const adopted = await upsertCustomer(store.id, { shopifyCustomerId: "9001", email, emailVerified: true, firstName: "Otto" });
   assert.equal(adopted.id, v.customer.id);
   assert.equal(adopted.shopifyCustomerId, "9001");
+  assert.equal(adopted.emailVerified, true);
   assert.equal(await prisma.customer.count({ where: { storeId: store.id, email } }), 1);
   assert.equal(await bal(adopted.id), 25);
-  ok("when Shopify reports the same email, the email-login account is adopted (no duplicate, points kept)");
+  ok("account merge: an unverified Shopify email never takes over an email-code account; a Shopify-verified one adopts it (no duplicate, points kept)");
 
   // ---- referrals
   const alice = await upsertCustomer(store.id, { shopifyCustomerId: "1", email: "alice@example.invalid", emailVerified: true, firstName: "Alice" });
@@ -654,6 +668,9 @@ try {
   assert.equal(FC.phoneKey("08800637327"), "8800637327");
   assert.equal(FC.phoneKey("12345"), null);
   await assert.rejects(() => FC.saveFastCheckout(store, { logoUrl: "http://insecure.test/l.png" }), /https/);
+  delete process.env.TRUSTED_IP_HEADER;
+  await assert.rejects(() => FC.saveFastCheckout(store, { allowedIps: "1.2.3.4" }), /TRUSTED_IP_HEADER/);  // an IP list can't be turned on without a trusted header
+  process.env.TRUSTED_IP_HEADER = "x-forwarded-for";                                         // behind one load balancer: the proxy appends the real address
   const fcInt = await FC.saveFastCheckout(store, { heading: "Use Claura points", logoUrl: "https://x.test/l.png", allowedIps: "1.2.3.4, bad ip!, 5.6.7.8, ::1" });
   assert.deepEqual([fcInt.enabled, fcInt.config.allowedIps], [true, ["1.2.3.4", "5.6.7.8", "::1"]]);
   const fcUrl = (path) => `https://app.test/integrations/shiprocket/${store.id}/${path}`;
@@ -665,6 +682,16 @@ try {
   const authed = await FC.authenticateFastCheckout(fcReq({ authorization: `Bearer ${fcInt.webhookToken}`, "x-forwarded-for": "5.6.7.8" }), store.id, "lookup");
   assert.ok(!(authed instanceof Response) && authed.store.id === store.id);
   assert.ok((await FC.authenticateFastCheckout(fcReq({ "x-api-key": fcInt.webhookToken }), "some-other-store", "lookup")) instanceof Response);
+  // spoofing: the caller puts an allowed address FIRST; our proxy appends the real one at the end
+  assert.ok(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "5.6.7.8, 9.9.9.9" })));
+  assert.ok(!(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "9.9.9.9, 5.6.7.8" }))));  // the real (last) address is allowed
+  assert.equal(FC.callerIp(fcReq({ "x-forwarded-for": "1.1.1.1, 2.2.2.2, 3.3.3.3" })), "3.3.3.3");
+  process.env.TRUSTED_IP_HEADER = "fly-client-ip";                                           // a host that sets its own single-address header
+  assert.ok(!(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "fly-client-ip": "5.6.7.8" }))));
+  assert.ok(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "5.6.7.8", "cf-connecting-ip": "5.6.7.8" })));  // other headers are ignored
+  delete process.env.TRUSTED_IP_HEADER;                                                       // list set but no trusted header: fail closed
+  assert.ok(await denied(fcReq({ "x-api-key": fcInt.webhookToken, "x-forwarded-for": "5.6.7.8" })));
+  process.env.TRUSTED_IP_HEADER = "x-forwarded-for";
 
   const fcRew = await prisma.reward.create({ data: { storeId: store.id, name: "FC fixed", type: "FIXED_AMOUNT", value: 5, pointsCost: 500 } });
   const fcCust = await upsertCustomer(store.id, { shopifyCustomerId: "7001", email: "fc@import.test", emailVerified: true, phone: "+918800637327", firstName: "Manan" });
@@ -794,6 +821,39 @@ try {
   await STK.clearStackRules(store.id);
   await prisma.reward.updateMany({ where: { storeId: store.id }, data: { active: true } });
   ok("reward combinations: per-pair choices are enforced at redeem (incl. same-twice), a used code frees the slot, retries and the off switch are unaffected");
+
+  // ---- review fixes: lockout, self-referral by phone, data deletion
+  const { otpHourlyBlocked } = await import("../app/services/identity.server.js");
+  assert.deepEqual([otpHourlyBlocked(300, false), otpHourlyBlocked(300, true), otpHourlyBlocked(299, false), otpHourlyBlocked(5000, true)], [true, false, false, false]);
+  ok("email-code cap: past the store-wide limit only strangers are turned away; existing members still get codes");
+
+  const phoneA = await upsertCustomer(store.id, { shopifyCustomerId: "7301", email: "phone.a@example.invalid", emailVerified: true, phone: "+91 88006 37327" });
+  const phoneB = await upsertCustomer(store.id, { shopifyCustomerId: "7302", email: "phone.b@example.invalid", emailVerified: true, phone: "08800637327" });
+  const phoneCode = await ensureReferralCode(phoneA);
+  await assert.rejects(() => applyReferralCode({ store, customer: phoneB, code: phoneCode }), /own code/);   // same number, different email and Shopify id
+  const phoneC = await upsertCustomer(store.id, { shopifyCustomerId: "7303", email: "phone.c@example.invalid", emailVerified: true, phone: "+91 99999 11111" });
+  await applyReferralCode({ store, customer: phoneC, code: phoneCode });                                    // a genuinely different person is fine
+  ok("self-referral: the same phone number can't use its own referral code from a second account");
+
+  const { redactCustomer } = await import("../app/services/privacy.server.js");
+  const gone = await prisma.customer.create({ data: { storeId: store.id, email: "gone@example.invalid", emailVerified: true } });   // email-code account: no Shopify id
+  const goneByShopify = await upsertCustomer(store.id, { shopifyCustomerId: "7401", email: "gone.too@example.invalid", emailVerified: true });
+  const bystander = await upsertCustomer(store.id, { shopifyCustomerId: "7402", email: "stays@example.invalid", emailVerified: true });
+  await prisma.order.create({ data: { storeId: store.id, shopifyOrderId: "9990001", email: "gone@example.invalid", eligibleAmount: 10 } });
+  await prisma.order.create({ data: { storeId: store.id, shopifyOrderId: "9990002", email: "stays@example.invalid", eligibleAmount: 10, customerId: bystander.id } });
+  await prisma.notification.create({ data: { storeId: store.id, customerId: gone.id, kind: "points_earned", toEmail: "gone@example.invalid", subject: "s", status: "SENT", dedupeKey: "redact-1" } });
+  await prisma.otpChallenge.create({ data: { storeId: store.id, email: "gone@example.invalid", codeHash: "x", expiresAt: new Date(Date.now() + 600000) } });
+  assert.deepEqual(await redactCustomer(store.id, { email: "GONE@example.invalid" }), { customers: 1 });         // by email only (Shopify sends no id for these)
+  assert.equal(await prisma.customer.count({ where: { id: gone.id } }), 0);
+  assert.equal((await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "9990001" } })).email, null);   // the order stays, the email goes
+  assert.equal(await prisma.notification.count({ where: { storeId: store.id, toEmail: "gone@example.invalid" } }), 0);
+  assert.equal(await prisma.otpChallenge.count({ where: { storeId: store.id, email: "gone@example.invalid" } }), 0);
+  assert.deepEqual(await redactCustomer(store.id, { id: 7401 }), { customers: 1 });                               // by Shopify id
+  assert.equal(await prisma.customer.count({ where: { id: goneByShopify.id } }), 0);
+  assert.equal(await prisma.customer.count({ where: { id: bystander.id } }), 1);                                   // nobody else touched
+  assert.equal((await prisma.order.findFirst({ where: { storeId: store.id, shopifyOrderId: "9990002" } })).email, "stays@example.invalid");
+  assert.deepEqual(await redactCustomer(store.id, {}), { customers: 0 });
+  ok("data deletion: found by email as well as Shopify id; the email is erased from orders, the sent-email log and login codes; others untouched");
 
   // ---- analytics
   await postTransaction({ storeId: store.id, customerId: dana.id, type: "ADJUST", points: 10, source: "manual", idempotencyKey: "an1" });

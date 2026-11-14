@@ -3,6 +3,7 @@ import db from "../db.server";
 import { deleteStore, getStoreByShop } from "../services/store.server";
 import { upsertCustomer, shapeCustomer } from "../services/customers.server";
 import { handleReturnWebhook } from "../services/returns.server";
+import { redactCustomer } from "../services/privacy.server";
 import {
   claimAndEvaluate,
   handleFulfillmentEvent,
@@ -81,16 +82,10 @@ export const action = async ({ request }) => {
       });
       break;
 
-    case "CUSTOMERS_REDACT": {
-      // Erase the shopper's account in this store; ledger/redemptions cascade.
-      const id = payload.customer?.id;
-      if (id) {
-        await db.customer.deleteMany({
-          where: { storeId: store.id, shopifyCustomerId: String(id) },
-        });
-      }
+    case "CUSTOMERS_REDACT":
+      // Erase the shopper in this store, by Shopify id and by email (see privacy.server.js).
+      await redactCustomer(store.id, { id: payload.customer?.id, email: payload.customer?.email });
       break;
-    }
     case "CUSTOMERS_DATA_REQUEST":
       // Data is exportable by the merchant from the Customers page; nothing to push.
       console.log(`[compliance] data request for ${shop}`);

@@ -583,7 +583,7 @@ The redeem call returns a single-use Shopify discount code (and its value) to ap
             label="Only accept requests from these IP addresses (optional)"
             name="allowedIps"
             value={fc.ips}
-            details="Comma separated. Leave empty to rely on the secret key alone; add Shiprocket's server IPs once they share them."
+            details="Comma separated. Leave empty to rely on the secret key alone. To use it, your server needs the TRUSTED_IP_HEADER setting (the header your host sets with the real caller address: fly-client-ip on Fly, cf-connecting-ip behind Cloudflare); without it we refuse to save a list."
           />
           <s-stack direction="inline" gap="small">
             <s-button type="submit" variant="primary" loading={busy}>{fc.enabled ? "Save" : "Turn on"}</s-button>

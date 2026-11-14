@@ -5,6 +5,8 @@ import { normalizeEmail } from "./identity.server.js";
 import { redeemReward, RedeemError } from "./redeem.server.js";
 import { describeReward, variableOf } from "./storefront.server.js";
 import { authenticateIntegrationWebhook, ensureIntegration, getIntegration } from "./integrations.server.js";
+import { getRedis } from "../queue/queue.server.js";
+import { phoneKey } from "../lib/phone.js";
 
 // Fast-checkout apps (Shiprocket Checkout / fastrr) replace the Shopify checkout page, so the
 // storefront widget and a pasted discount code never get a chance to run. Instead their server
@@ -39,9 +41,17 @@ export async function saveFastCheckout(store, { heading, logoUrl, allowedIps, re
   let integration = await ensureIntegration(store.id, KIND);
   const logo = cleanText(logoUrl, 500);
   if (logo && !/^https:\/\//i.test(logo)) throw new Error("The logo must be a full https:// image link");
+  const ips = cleanIps(allowedIps);
+  // An IP list is only as good as the header it reads. Without a header our own proxy sets, the
+  // caller could send any address, so refuse to turn the list on rather than pretend it protects.
+  if (ips.length && !trustedIpHeader()) {
+    throw new Error(
+      "To use an IP list, tell the server which header carries the real caller address: set TRUSTED_IP_HEADER (for example fly-client-ip on Fly, cf-connecting-ip behind Cloudflare, or x-forwarded-for behind one load balancer), then save again.",
+    );
+  }
   const data = {
     enabled: true,
-    config: { heading: cleanText(heading, 60) || "Use your points", logoUrl: logo, allowedIps: cleanIps(allowedIps) },
+    config: { heading: cleanText(heading, 60) || "Use your points", logoUrl: logo, allowedIps: ips },
   };
   if (regenerateKey) data.webhookToken = randomBytes(24).toString("base64url");
   integration = await prisma.integration.update({ where: { id: integration.id }, data });
@@ -54,11 +64,32 @@ export async function disableFastCheckout(storeId) {
 
 // ---- who is asking ------------------------------------------------------------------------------
 
+// The header our own proxy sets (name in TRUSTED_IP_HEADER). Never read a header the caller can set
+// freely: they could send any address and pass the list.
+const trustedIpHeader = () => String(process.env.TRUSTED_IP_HEADER || "").trim().toLowerCase();
+
+/** The caller's address as our own proxy saw it, or null when no trusted header is configured. */
+export function callerIp(request) {
+  const name = trustedIpHeader();
+  if (!name) return null;
+  const parts = String(request.headers.get(name) || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  // x-forwarded-for grows to the right as it passes proxies, so the LAST entry is the one our proxy
+  // added; everything before it was supplied by the caller. Other headers hold a single address.
+  return (name === "x-forwarded-for" ? parts[parts.length - 1] : parts[0]) || null;
+}
+
 // A leaked key must not be able to hammer the lookup (it answers "does this phone have points").
+// Counted in Redis so every server instance shares one count and a restart doesn't reset it; if
+// Redis is unreachable it falls back to counting in this process, and tries Redis again later.
 const hits = new Map();
-function limited(storeId, bucket, max) {
+let redisSkipUntil = 0;
+const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("redis timeout")), ms))]);
+
+function limitedInMemory(key, max) {
   const now = Date.now();
-  const key = `${storeId}:${bucket}`;
   const recent = (hits.get(key) || []).filter((t) => now - t < 60_000);
   if (recent.length >= max) {
     hits.set(key, recent);
@@ -69,6 +100,21 @@ function limited(storeId, bucket, max) {
   return false;
 }
 
+async function limited(storeId, bucket, max) {
+  if (Date.now() >= redisSkipUntil) {
+    try {
+      const key = `rl:fc:${storeId}:${bucket}:${Math.floor(Date.now() / 60_000)}`;
+      const redis = getRedis();
+      const n = await within(redis.incr(key), 400);
+      if (n === 1) redis.expire(key, 120).catch(() => {});
+      return n > max;
+    } catch {
+      redisSkipUntil = Date.now() + 30_000;
+    }
+  }
+  return limitedInMemory(`${storeId}:${bucket}`, max);
+}
+
 /** Checks the key (and the allowed IPs, if set) → { integration, store } or a Response to send back. */
 export async function authenticateFastCheckout(request, storeId, bucket) {
   const auth = await authenticateIntegrationWebhook(request, KIND, storeId);
@@ -77,10 +123,11 @@ export async function authenticateFastCheckout(request, storeId, bucket) {
 
   const allowed = integration.config?.allowedIps || [];
   if (allowed.length) {
-    const ip = (request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for") || "").split(",")[0].trim();
-    if (!allowed.includes(ip)) return json({ error: "Unauthorized" }, 401);
+    const ip = callerIp(request);
+    if (!ip) console.warn("[fast-checkout] IP list is set but TRUSTED_IP_HEADER is not configured: refusing the request");
+    if (!ip || !allowed.includes(ip)) return json({ error: "Unauthorized" }, 401);
   }
-  if (limited(storeId, bucket, bucket === "redeem" ? 30 : 120)) return json({ error: "Too many requests" }, 429);
+  if (await limited(storeId, bucket, bucket === "redeem" ? 30 : 120)) return json({ error: "Too many requests" }, 429);
 
   const store = await prisma.store.findUnique({ where: { id: storeId }, include: { settings: true } });
   if (!store?.settings) return json({ error: "Unauthorized" }, 401);
@@ -89,11 +136,7 @@ export async function authenticateFastCheckout(request, storeId, bucket) {
 
 // ---- finding the customer -----------------------------------------------------------------------
 
-/** The last 10 digits of a phone number, so +91 88006 37327, 08800637327 and 8800637327 all match. */
-export function phoneKey(raw) {
-  const digits = String(raw ?? "").replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : null;
-}
+export { phoneKey };
 
 /** Email wins when both are given; two different people for one request is treated as "not found". */
 export async function findCustomerByContact(storeId, { phone, email } = {}) {

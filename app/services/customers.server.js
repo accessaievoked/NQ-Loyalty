@@ -4,9 +4,14 @@ import { verifyRef } from "../lib/crypto.server.js";
 
 // Identity rules
 //  1. A loyalty account is keyed by (store, Shopify customer id). One per customer per store.
-//  2. Email is only a supporting signal: guest orders are attached to an account by email
-//     ONLY when Shopify reports that email as verified for the customer.
+//  2. Email is only a supporting signal. It links anything to a Shopify customer ONLY when
+//     Shopify itself reports that customer's email as verified: guest orders are attached by a
+//     verified email, and an email-code account (or an imported one) is merged into a Shopify
+//     customer only when Shopify verified that customer's email. A verified inbox on our side
+//     is never enough, because it says nothing about who registered the store account.
 //  3. A different Shopify id never merges into an existing account, even if the email matches.
+//  4. An unverified Shopify customer whose email is already taken gets its own account without
+//     that email; their points start from zero and nothing of the other account is visible.
 
 const toStr = (v) => (v === null || v === undefined ? null : String(v));
 const num = (gid) => String(gid).split("/").pop();
@@ -58,8 +63,11 @@ export async function upsertCustomer(storeId, input, { bonus = true } = {}) {
   let email = data.email;
   if (email) {
     const byEmail = await prisma.customer.findUnique({ where: { storeId_email: { storeId, email } } });
-    // Either side can vouch for the address: the login code (existing account) or Shopify (incoming customer).
-    if (byEmail && !byEmail.shopifyCustomerId && (byEmail.emailVerified || data.emailVerified)) {
+    // Merge ONLY when Shopify says this customer owns the address. The old account's email code
+    // proves its owner controls the inbox, but proves nothing about whoever just registered a store
+    // account with that email: merging on that alone would hand them the old account's points.
+    // An unverified Shopify customer falls through to a separate account without the email.
+    if (byEmail && !byEmail.shopifyCustomerId && data.emailVerified) {
       return prisma.customer.update({
         where: { id: byEmail.id },
         data: {
