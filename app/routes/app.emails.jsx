@@ -4,7 +4,8 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { requireStore } from "../services/auth.server";
 import { getEmailBrand, isKind, listEmailTemplates, resetEmailTemplate, saveEmailBrand, saveEmailTemplate } from "../services/emailtemplates.server";
 import { sendTemplateTest, smtpConfigured } from "../services/mailer.server";
-import { getRedis } from "../queue/queue.server";
+import { emailQueueCounts, retryFailedEmails } from "../queue/emailqueue.server";
+import { schedulerStatus } from "../queue/scheduler.server";
 import db from "../db.server";
 import {
   EMAIL_BLOCK_TYPES,
@@ -26,13 +27,10 @@ import "../styles/editor.css";
 // One page for everything email: how each message looks (blocks or your own HTML), and when
 // and from whom they are sent.
 
-async function redisUp() {
-  try {
-    const pong = await Promise.race([getRedis().ping(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1500))]);
-    return pong === "PONG";
-  } catch {
-    return false;
-  }
+// Where the background jobs stand: is the in-app scheduler running, and what's waiting in the email queue.
+async function queueStatus(storeId) {
+  const [counts, st] = [await emailQueueCounts(storeId), schedulerStatus()];
+  return { running: st.running, nextWakeAt: st.nextWakeAt, lastMaintenanceAt: st.lastMaintenanceAt, error: st.lastError, ...counts };
 }
 
 export const loader = async ({ request }) => {
@@ -42,7 +40,7 @@ export const loader = async ({ request }) => {
     shop: store.name || store.shop,
     storeEmail: store.email || session.email || "",
     smtp: smtpConfigured(),
-    redis: await redisUp(),
+    queue: await queueStatus(store.id),
     templates: await listEmailTemplates(store.id),
     brand: await getEmailBrand(store.id),
     settings: {
@@ -89,6 +87,11 @@ export const action = async ({ request }) => {
     }
     const brand = await saveEmailBrand(store.id, input);
     return { ok: true, intent, brand, message: "Brand saved" };
+  }
+
+  if (intent === "retry-failed") {
+    const n = await retryFailedEmails(store.id);
+    return { ok: true, intent, message: n ? `Retrying ${n} failed email${n === 1 ? "" : "s"}` : "No failed emails to retry" };
   }
 
   const kind = String(f.get("kind"));
@@ -170,7 +173,7 @@ function BrandSettings({ brand }) {
 
 // ---- settings panel ---------------------------------------------------------------------------------
 
-function EmailSettings({ settings, smtp, redis }) {
+function EmailSettings({ settings, smtp, queue }) {
   const fetcher = useFetcher();
   const [s, setS] = useState(settings);
   const set = (patch) => setS((x) => ({ ...x, ...patch }));
@@ -188,6 +191,12 @@ function EmailSettings({ settings, smtp, redis }) {
   useEffect(() => {
     if (fetcher.data?.ok) shopify.toast.show(fetcher.data.message);
   }, [fetcher.data, shopify]);
+  const retrying = fetcher.state !== "idle" && fetcher.formData?.get("intent") === "retry-failed";
+  const retry = () => {
+    const fd = new FormData();
+    fd.set("intent", "retry-failed");
+    fetcher.submit(fd, { method: "POST" });
+  };
 
   return (
     <div className="ed-pane-body">
@@ -217,9 +226,25 @@ function EmailSettings({ settings, smtp, redis }) {
       <div className="ed-section-title">System status</div>
       <ul className="ed-status">
         <li><span className={`ed-dot ${smtp ? "ok" : "bad"}`} /> Email sending (SMTP): <strong>{smtp ? "connected" : "not set up on the server"}</strong></li>
-        <li><span className={`ed-dot ${redis ? "ok" : "bad"}`} /> Background jobs (Redis): <strong>{redis ? "connected" : "offline"}</strong></li>
+        <li>
+          <span className={`ed-dot ${queue.running ? "ok" : "bad"}`} /> Background jobs:{" "}
+          <strong>{queue.running ? "running" : "not running on this server"}</strong>
+        </li>
+        <li>
+          <span className={`ed-dot ${queue.failed ? "bad" : "ok"}`} /> Email queue:{" "}
+          <strong>
+            {queue.waiting} waiting{queue.failed ? `, ${queue.failed} failed` : ""}
+          </strong>
+        </li>
       </ul>
-      {!redis && <p className="ed-help">Delayed point release and reminder emails need Redis and the worker: run <code>npm run redis</code> and <code>npm run worker</code>.</p>}
+      {queue.running && queue.nextWakeAt && <p className="ed-help">Next scheduled wake-up: {new Date(queue.nextWakeAt).toLocaleString()}.</p>}
+      {!queue.running && <p className="ed-help">Delayed point releases and queued emails run inside the app. If you turned the scheduler off (DISABLE_SCHEDULER), something must call <code>POST /internal/tick</code> on a schedule.</p>}
+      {queue.error && <p className="ed-help">Last background error: {queue.error}</p>}
+      {queue.failed > 0 && (
+        <button type="button" className="ed-btn wide" disabled={retrying} onClick={retry}>
+          {retrying ? "Retrying…" : `Retry ${queue.failed} failed email${queue.failed === 1 ? "" : "s"}`}
+        </button>
+      )}
     </div>
   );
 }
@@ -424,7 +449,7 @@ export default function Emails() {
           {section === "settings" ? (
             <div className="ed-pane">
               <BrandSettings brand={data.brand} />
-              <EmailSettings settings={data.settings} smtp={data.smtp} redis={data.redis} />
+              <EmailSettings settings={data.settings} smtp={data.smtp} queue={data.queue} />
             </div>
           ) : selected ? (
             <div className="ed-pane">

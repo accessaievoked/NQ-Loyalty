@@ -8,16 +8,17 @@ page with a theme-editor-style visual editor.
 
 ```bash
 npm install
-npm run redis          # Redis in Docker (needs Docker Desktop running)
 npx prisma migrate deploy
-npm run dev            # Shopify CLI: tunnel + app + webhooks
-npm run worker         # second terminal: background jobs
+npm run dev            # Shopify CLI: tunnel + app + webhooks (and the background jobs)
 ```
 
-Config lives in `.env` (see `.env.example`): `DATABASE_URL` (Neon), `REDIS_URL`, `SMTP_*`, and
+No Redis and no separate worker: delayed point releases, queued emails and the 6-hourly maintenance run
+inside the web server (see **Background jobs** below).
+
+Config lives in `.env` (see `.env.example`): `DATABASE_URL` (Neon), `SMTP_*`, and
 `APP_ENCRYPTION_KEY` (encrypts stored Judge.me tokens and peppers login-code hashes; required in
 production). Shopify keys are injected by `shopify app dev`.
-`docker compose up --build` runs Redis + web + worker together.
+`docker compose up --build` runs the web app (which includes the background jobs).
 
 Check everything end to end against the database (each uses a throwaway store and deletes it):
 
@@ -42,7 +43,7 @@ Check everything end to end against the database (each uses a throwaway store an
 | Emails (SMTP, deduped) / reminders | `mailer`, `notify`, `credit`, `reminders` `.server.js` |
 | Editable email templates (blocks or HTML) | `app/lib/email/templates.js`, `app/services/emailtemplates.server.js`, `app/routes/app.emails.jsx` |
 | Developer source (full CSS/HTML, rollback) | `app/services/devsource.server.js`, `app/routes/app.developer.jsx` |
-| Queue + worker (BullMQ) | `app/queue/queue.server.js`, `worker/index.js` |
+| Background jobs (scheduler, email queue) | `app/queue/scheduler.server.js`, `emailqueue.server.js`, `boot.server.js` |
 | Storefront (app proxy `/apps/loyalty/*`) | `app/routes/proxy.*` |
 | Widget model, renderer, storefront runtime | `app/lib/widget/*` |
 | Theme app extension (embed + page block) | `extensions/loyalty-widget` |
@@ -54,8 +55,8 @@ Check everything end to end against the database (each uses a throwaway store an
   from the verified Shopify session / app-proxy signature, never from request input. `shop/redact`
   calls `deleteStore()`, which removes the store, all its data and its sessions.
 - **Points timing.** Merchant picks the trigger (paid / fulfilled / delivered) and a hold of N days.
-  `0` credits immediately. Pending awards are scheduled as delayed BullMQ jobs; a sweep (on worker start, then every 6 hours)
-  re-checks the database so a lost job or Redis restart can't strand points.
+  `0` credits immediately. Pending awards sit in the database with their release time; the in-app scheduler
+  wakes at that time (see **Background jobs**), so a restart or deploy can't strand points.
 - **Ledger.** Append-only rows with idempotency keys; the customer row is locked per write so
   concurrent redeems can't overspend. Refunds post proportional `REVERSAL` rows (balance may go
   negative if points were already spent).
@@ -152,3 +153,20 @@ can't redeem a reward that is unticked against one of their unused codes (`Rewar
   Shopify itself reports that customer's email as verified. Otherwise the Shopify customer gets a separate account without that email.
 - **Fast-checkout IP list** needs `TRUSTED_IP_HEADER` (see `.env.example`); without it the list can't be saved and requests are refused.
 - **Tests:** `npm run test:unit` (no database) and `npm run test:smoke` (needs the database).
+
+## Background jobs (no Redis)
+
+The database is the queue and one timer, inside the web server process, wakes the app when something is due.
+
+- **What runs.** Delayed point releases (`PointsAward.releaseAt`), queued emails (`EmailJob` table), and a maintenance
+  pass at start and every 6 hours (points expiry, stuck redemptions, expired codes, login-code clean-up, expiry
+  reminders, Judge.me reviews, pruning finished jobs).
+- **No polling.** The scheduler asks the database "when is the next thing due?" only at start, after doing work, and
+  when something is queued (then it already knows the time). Between events the app doesn't touch the database, so a
+  serverless one can sleep. Release times are snapped up to `SCHEDULER_SNAP_MINUTES` (default 5) so many awards share a wake-up.
+- **Nothing is lost.** On every start (deploy, crash, wake) it runs everything that came due meanwhile. Late, never lost.
+- **Emails.** Claimed with `FOR UPDATE SKIP LOCKED` and a 2-minute lease, so two instances never send the same row and a
+  crash mid-send is picked up again. Retries back off 30s, 2m, 10m, 1h, 6h, then the email is marked FAILED (visible, with
+  a "Retry" button, on the Emails page). Paced to `EMAIL_MAX_PER_MINUTE` (default 120). Queueing is idempotent per `dedupeKey`.
+- **A machine that sleeps.** Set `DISABLE_SCHEDULER=1` and `CRON_SECRET`, and have an outside scheduler call
+  `POST /internal/tick` (every few minutes for emails, `?maintenance=1` about every 6 hours) with `Authorization: Bearer <CRON_SECRET>`.

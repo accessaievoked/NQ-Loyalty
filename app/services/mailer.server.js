@@ -17,6 +17,10 @@ function getTransporter() {
   return transporter;
 }
 
+// A claim older than this belongs to an attempt that died (SMTP gives up well before this).
+export const STALE_SENDING_MS = 5 * 60 * 1000;
+export const isStaleSending = (createdAt, now = Date.now()) => now - new Date(createdAt).getTime() > STALE_SENDING_MS;
+
 export const smtpConfigured = () =>
   !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
 
@@ -56,8 +60,15 @@ export async function sendNotification({ store, customerId = null, kind, to, ded
       data: { storeId: store.id, customerId, kind, toEmail: to, subject, status: "SENDING", dedupeKey },
     });
   } catch (e) {
-    if (e?.code === "P2002") return { skipped: "duplicate" };
-    throw e;
+    if (e?.code !== "P2002") throw e;
+    const existing = await prisma.notification.findUnique({ where: { storeId_dedupeKey: { storeId: store.id, dedupeKey } } });
+    if (existing?.status !== "SENDING") return { skipped: "duplicate" }; // already sent
+    // Another attempt holds the claim. If it is old, that attempt died mid-send (a crash): take it over
+    // so the email isn't lost. If it is recent, it is probably still sending: ask to be retried later.
+    if (!isStaleSending(existing.createdAt)) return { skipped: "in-progress" };
+    const took = await prisma.notification.updateMany({ where: { id: existing.id, status: "SENDING", createdAt: existing.createdAt }, data: { createdAt: new Date() } });
+    if (took.count !== 1) return { skipped: "in-progress" };
+    row = existing;
   }
 
   try {

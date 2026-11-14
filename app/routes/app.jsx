@@ -2,12 +2,10 @@ import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { requireStore } from "../services/auth.server";
-import { maybeSweep } from "../services/sweep.server";
 
 export const loader = async ({ request }) => {
   // Also provisions the Store row (and its defaults) the first time a shop opens the app.
   await requireStore(request);
-  maybeSweep();
 
   // eslint-disable-next-line no-undef
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };

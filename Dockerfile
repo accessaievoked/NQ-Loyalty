@@ -1,5 +1,4 @@
-# One image, two processes: the web app (default) and the background worker
-# (docker compose overrides the command for the worker service).
+# One image, one process: the web app, which also runs the background jobs (no Redis, no worker).
 FROM node:22-alpine AS build
 RUN apk add --no-cache openssl
 WORKDIR /app

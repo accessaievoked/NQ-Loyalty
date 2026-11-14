@@ -63,6 +63,7 @@ model Store {
   transactions   PointsTransaction[]
   redemptions    Redemption[]
   notifications  Notification[]
+  emailJobs      EmailJob[]
   otpChallenges  OtpChallenge[]
   sessions       LoyaltySession[]
   referrals      Referral[]
@@ -532,4 +533,40 @@ model Notification {
   createdAt  DateTime  @default(now())
 
   @@unique([storeId, dedupeKey])
+}
+
+// ---------------------------------------------------------------------------------------
+// Email queue. The database IS the queue (no Redis): an email to send is a row, and the in-app
+// scheduler (app/queue/scheduler.server.js) sends the rows that are due. A row is claimed by
+// moving it to SENDING with a lease, so two app instances never send the same one, and a crash
+// mid-send is picked up again when the lease runs out. `Notification` stays the log of what was sent.
+// ---------------------------------------------------------------------------------------
+
+enum EmailJobStatus {
+  PENDING // waiting for nextAttemptAt
+  SENDING // claimed by a scheduler; leaseUntil says until when
+  SENT
+  FAILED // gave up after the last attempt; lastError says why
+}
+
+model EmailJob {
+  id            String         @id @default(cuid())
+  storeId       String
+  store         Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind          String // points_earned | redeemed | expiring | otp …
+  customerId    String?
+  // One job per (store, dedupeKey): queueing the same email twice is a no-op.
+  dedupeKey     String
+  payload       Json
+  status        EmailJobStatus @default(PENDING)
+  attempts      Int            @default(0)
+  nextAttemptAt DateTime       @default(now())
+  leaseUntil    DateTime?
+  lastError     String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  doneAt        DateTime?
+
+  @@unique([storeId, dedupeKey])
+  @@index([status, nextAttemptAt])
 }

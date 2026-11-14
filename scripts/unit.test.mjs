@@ -17,6 +17,9 @@ const { otpHourlyBlocked } = await import("../app/services/identity.server.js");
 const { callerIp } = await import("../app/services/fastcheckout.server.js");
 const { normalizeBrand, shade } = await import("../app/lib/email/templates.js");
 const { parseCsv, readImportRows } = await import("../app/services/import.server.js");
+const { snapUp, timerDelay, MAX_TIMER_MS } = await import("../app/queue/scheduler.server.js");
+const { backoffMs, MAX_ATTEMPTS } = await import("../app/queue/emailqueue.server.js");
+const { isStaleSending, STALE_SENDING_MS } = await import("../app/services/mailer.server.js");
 
 // ---- computePurchasePoints ----------------------------------------------------------------------
 test("computePurchasePoints: per-currency rules floor, fixed rules respect the minimum, inactive rules are ignored", () => {
@@ -137,3 +140,38 @@ test("parseCsv / readImportRows: quotes, BOM, CRLF, header aliases; bad, duplica
   assert.equal(problems.length, 3);
   assert.match(readImportRows("name,points\nA,1").error, /email/);
 });
+
+// ---- scheduler helpers --------------------------------------------------------------------------
+test("snapUp: rounds up to the next window so many awards share one wake-up; 0 means exact", () => {
+  const MIN = 60_000;
+  const t = Date.UTC(2026, 10, 14, 10, 2, 17); // 10:02:17
+  assert.equal(snapUp(t, 5), Date.UTC(2026, 10, 14, 10, 5, 0));
+  assert.equal(snapUp(Date.UTC(2026, 10, 14, 10, 5, 0), 5), Date.UTC(2026, 10, 14, 10, 5, 0)); // already on a boundary
+  assert.equal(snapUp(t, 60), Date.UTC(2026, 10, 14, 11, 0, 0));
+  assert.equal(snapUp(t, 0), t);
+  assert.equal(snapUp(t, "abc"), t);
+  assert.ok(snapUp(t, 5) - t < 5 * MIN && snapUp(t, 5) >= t); // never early, never more than one window late
+  assert.equal(snapUp(snapUp(t, 5), 5), snapUp(t, 5)); // idempotent
+});
+
+test("timerDelay: never negative, never more than setTimeout allows (long waits re-arm)", () => {
+  assert.equal(timerDelay(1000, 5000), 0); // already due
+  assert.equal(timerDelay(9000, 5000), 4000);
+  assert.equal(timerDelay(5000 + 90 * 86_400_000, 5000), MAX_TIMER_MS); // a 90-day wait is cut to ~24.8 days
+  assert.ok(MAX_TIMER_MS <= 2 ** 31 - 1);
+});
+
+test("backoffMs: retries wait 30s, 2m, 10m, 1h, 6h, and a sane value for any attempt count", () => {
+  assert.deepEqual([1, 2, 3, 4, 5].map(backoffMs), [30_000, 120_000, 600_000, 3_600_000, 21_600_000]);
+  assert.equal(backoffMs(0), 30_000);
+  assert.equal(backoffMs(99), 21_600_000);
+  assert.equal(MAX_ATTEMPTS, 6);
+});
+
+test("isStaleSending: a send claim is only taken over once it is old enough to have died", () => {
+  const now = Date.now();
+  assert.equal(isStaleSending(new Date(now - 1000), now), false);
+  assert.equal(isStaleSending(new Date(now - STALE_SENDING_MS + 1000), now), false);
+  assert.equal(isStaleSending(new Date(now - STALE_SENDING_MS - 1000), now), true);
+});
+

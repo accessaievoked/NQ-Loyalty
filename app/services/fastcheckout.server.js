@@ -5,7 +5,6 @@ import { normalizeEmail } from "./identity.server.js";
 import { redeemReward, RedeemError } from "./redeem.server.js";
 import { describeReward, variableOf } from "./storefront.server.js";
 import { authenticateIntegrationWebhook, ensureIntegration, getIntegration } from "./integrations.server.js";
-import { getRedis } from "../queue/queue.server.js";
 import { phoneKey } from "../lib/phone.js";
 
 // Fast-checkout apps (Shiprocket Checkout / fastrr) replace the Shopify checkout page, so the
@@ -82,14 +81,12 @@ export function callerIp(request) {
 }
 
 // A leaked key must not be able to hammer the lookup (it answers "does this phone have points").
-// Counted in Redis so every server instance shares one count and a restart doesn't reset it; if
-// Redis is unreachable it falls back to counting in this process, and tries Redis again later.
+// Counted in this process: right for one server, and a restart resets it (the secret key is the real
+// protection; this only slows a leaked one down).
 const hits = new Map();
-let redisSkipUntil = 0;
-const within = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("redis timeout")), ms))]);
-
-function limitedInMemory(key, max) {
+function limited(storeId, bucket, max) {
   const now = Date.now();
+  const key = `${storeId}:${bucket}`;
   const recent = (hits.get(key) || []).filter((t) => now - t < 60_000);
   if (recent.length >= max) {
     hits.set(key, recent);
@@ -98,21 +95,6 @@ function limitedInMemory(key, max) {
   recent.push(now);
   hits.set(key, recent);
   return false;
-}
-
-async function limited(storeId, bucket, max) {
-  if (Date.now() >= redisSkipUntil) {
-    try {
-      const key = `rl:fc:${storeId}:${bucket}:${Math.floor(Date.now() / 60_000)}`;
-      const redis = getRedis();
-      const n = await within(redis.incr(key), 400);
-      if (n === 1) redis.expire(key, 120).catch(() => {});
-      return n > max;
-    } catch {
-      redisSkipUntil = Date.now() + 30_000;
-    }
-  }
-  return limitedInMemory(`${storeId}:${bucket}`, max);
 }
 
 /** Checks the key (and the allowed IPs, if set) → { integration, store } or a Response to send back. */
@@ -127,7 +109,7 @@ export async function authenticateFastCheckout(request, storeId, bucket) {
     if (!ip) console.warn("[fast-checkout] IP list is set but TRUSTED_IP_HEADER is not configured: refusing the request");
     if (!ip || !allowed.includes(ip)) return json({ error: "Unauthorized" }, 401);
   }
-  if (await limited(storeId, bucket, bucket === "redeem" ? 30 : 120)) return json({ error: "Too many requests" }, 429);
+  if (limited(storeId, bucket, bucket === "redeem" ? 30 : 120)) return json({ error: "Too many requests" }, 429);
 
   const store = await prisma.store.findUnique({ where: { id: storeId }, include: { settings: true } });
   if (!store?.settings) return json({ error: "Unauthorized" }, 401);

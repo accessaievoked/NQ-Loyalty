@@ -4,6 +4,11 @@ import { ServerRouter } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { bootBackgroundJobs } from "./queue/boot.server";
+
+// Delayed point releases, queued emails and the 6-hourly maintenance run inside this server process
+// (no Redis, no separate worker): the database is the queue and one timer wakes the app when something is due.
+bootBackgroundJobs();
 
 export const streamTimeout = 5000;
 

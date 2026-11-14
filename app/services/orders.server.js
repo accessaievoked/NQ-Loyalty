@@ -1,7 +1,7 @@
 import prisma from "../db.server.js";
 import { postTransaction, expiryDate } from "./ledger.server.js";
 import { resolveOrderCustomer, claimGuestOrders } from "./customers.server.js";
-import { enqueueAwardRelease } from "../queue/queue.server.js";
+import { enqueueAwardRelease } from "../queue/scheduler.server.js";
 import { notifyCustomer } from "./notify.server.js";
 import { maybeRewardReferral, reverseReferralForOrder } from "./referrals.server.js";
 
@@ -352,22 +352,39 @@ export async function releaseAward(awardId) {
   return result.transaction;
 }
 
-/** Safety net run by the worker: release anything due that the delayed job missed. */
-export async function releaseDueAwards() {
-  const due = await prisma.pointsAward.findMany({
-    where: { status: "PENDING", releaseAt: { lte: new Date() } },
-    select: { id: true },
-    take: 200,
-  });
-  let n = 0;
-  for (const a of due) {
-    try {
-      if (await releaseAward(a.id)) n += 1;
-    } catch (e) {
-      console.error("[sweep] release failed", a.id, e.message);
+/**
+ * Release every award whose hold has ended. Run by the scheduler when one is due, at start (anything
+ * that came due while the app was away) and in the 6-hourly maintenance pass.
+ * Awards held by an open return are left out of the query (they resume when the return ends), and
+ * one that errors is tried once per run, so this always finishes.
+ */
+export async function releaseDueAwards({ storeId = null } = {}) {
+  let released = 0;
+  const tried = new Set();
+  for (let pass = 0; pass < 25; pass += 1) {
+    const due = await prisma.pointsAward.findMany({
+      where: {
+        status: "PENDING",
+        releaseAt: { lte: new Date() },
+        OR: [{ order: { returnStatus: null } }, { order: { returnStatus: { notIn: RETURN_ON_HOLD } } }],
+        ...(storeId ? { storeId } : {}),
+      },
+      orderBy: { releaseAt: "asc" },
+      select: { id: true },
+      take: 200,
+    });
+    const fresh = due.filter((a) => !tried.has(a.id));
+    if (!fresh.length) break;
+    for (const a of fresh) {
+      tried.add(a.id);
+      try {
+        if (await releaseAward(a.id)) released += 1;
+      } catch (e) {
+        console.error("[scheduler] release failed", a.id, e.message);
+      }
     }
   }
-  return n;
+  return released;
 }
 
 /** Account just created/linked: attach guest orders and award points they now qualify for. */

@@ -8,7 +8,7 @@
 //  - FIFO expiry: credits are "lots" with a `remaining` counter; debits consume the lots that
 //    expire first, and the expiry job only expires what is left.
 //
-// Plain ESM with explicit .js imports so the BullMQ worker can import it directly.
+// Plain ESM with explicit .js imports so scripts and the scheduler can import it directly.
 import prisma from "../db.server.js";
 
 export class InsufficientPointsError extends Error {

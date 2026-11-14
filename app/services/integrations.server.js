@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import prisma from "../db.server.js";
 import { decrypt, encrypt, safeEqual } from "../lib/crypto.server.js";
 import { creditPoints } from "./credit.server.js";
-import { ensureJudgeMeSchedule, removeJudgeMeSchedule } from "../queue/queue.server.js";
 
 // Third-party integrations. Each one is optional, per store, and its credentials are encrypted.
 //
@@ -96,13 +95,11 @@ export async function connectJudgeMe({ store, apiToken, minRating = 4 }) {
       console.warn("[judgeme] webhook registration failed (polling will be used)", e.message);
     }
   }
-  await ensureJudgeMeSchedule(); // start polling now that at least one store uses it
   return getIntegration(store.id, "JUDGEME");
 }
 
 export async function disconnect(storeId, kind) {
   await prisma.integration.updateMany({ where: { storeId, kind }, data: { enabled: false, secretEnc: null } });
-  if (kind === "JUDGEME" && (await countJudgeMeConnected()) === 0) await removeJudgeMeSchedule();
 }
 
 export const countJudgeMeConnected = () =>
