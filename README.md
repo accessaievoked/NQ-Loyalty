@@ -117,17 +117,32 @@ row, and each block can override space above/below/sides. Every slider has a box
 
 ## Fast checkout (Shiprocket Checkout / fastrr)
 
-Fast-checkout apps replace Shopify's checkout, so the widget and pasted codes can't run there. Rules → **Fast checkout** turns on a
-server-to-server API that their checkout calls after it has verified the shopper's phone:
+Fast-checkout apps replace Shopify's checkout, so the widget and pasted codes can't run there. Rules → **Fast checkout** turns on
+server-to-server APIs their checkout calls instead. Two contracts are implemented:
+
+**Loyalty Points Manager** — Shiprocket's own published spec (`app/services/fastrrLoyalty.server.js`). Their checkout calls us by
+mobile number as it runs; points are debited at "block" time, before any order exists on either side, and confirmed or released
+once the order's outcome is known:
+
+- `POST /integrations/shiprocket/:storeId/loyalty/points` `{ mobile_number, cart_value }` → `{ data: { mobile_number, available_points, applicable_points } }`
+- `POST /integrations/shiprocket/:storeId/loyalty/block` `{ mobile_number, transactional_points, order_id }` → `{ data: { status, available_points, message, debited_points, transaction_id, discount_value, additional_properties: { redemptionFactor } } }`
+- `POST /integrations/shiprocket/:storeId/loyalty/unblock` `{ order_id }` → `{ data: { status: "Success" } }`
+- `POST /integrations/shiprocket/:storeId/order-webhook?token=…` (register this exact URL, token included — the doc sends no auth
+  header for this one) — on `status: "SUCCESS"` the block is confirmed; anything else releases it.
+
+The points→currency rate (`redemptionFactor`) comes from the store's `CUSTOM_AMOUNT` ("customer picks points") reward — the first
+active one, store-by-store. A store with none configured will quote 0 applicable points. Blocks are rows in `LoyaltyPointsBlock`,
+keyed by `(storeId, orderId)` — `orderId` is Shiprocket's own id, not a Shopify order — and a retried block for the same order id
+returns the original result rather than debiting twice.
+
+**Our own lookup/redeem** — kept for custom-checkout widgets built against a discount code instead of a direct balance API:
 
 - `POST /integrations/shiprocket/:storeId/lookup` `{ phone?, email? }` → `{ found, customer: { firstName, points }, canRedeem, offers[], currency, display }`
 - `POST /integrations/shiprocket/:storeId/redeem` `{ phone?, email?, rewardId, points?, requestId }` → `{ ok, code, pointsSpent, discountAmount, balance, … }`
 
-Auth: the store's secret key in `x-api-key` (or `Authorization: Bearer`), optionally restricted to Shiprocket's IPs. Phones match on
-their last 10 digits; a phone shared by two accounts matches nobody. `requestId` makes retries safe. The code is single-use and not
-tied to a Shopify login. **Shiprocket's own spec isn't public** — this is our side of the contract; Shiprocket's checkout team
-enables it (the setup card has a ready-to-send message) and may ask for different field names, which are all in
-`app/services/fastcheckout.server.js`.
+Auth for all of the above (except the order webhook): the store's secret key in `x-api-key` (or `Authorization: Bearer`), optionally
+restricted to Shiprocket's IPs. Phones/mobile numbers match on their last 10 digits; a phone shared by two accounts matches nobody.
+`requestId`/`order_id` make retries safe. Redeem's code is single-use and not tied to a Shopify login.
 
 
 ## Email brand and reward codes

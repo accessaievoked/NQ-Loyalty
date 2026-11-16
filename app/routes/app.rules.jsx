@@ -58,6 +58,11 @@ export const loader = async ({ request }) => {
       enabled: !!fast?.enabled,
       key: fast?.enabled ? fast.webhookToken : "",
       base: `${(process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "")}/integrations/shiprocket/${store.id}`,
+      // Only meaningful when enabled: the Order webhook's secret travels in the URL, not a header.
+      orderWebhookUrl: fast?.enabled
+        ? `${(process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "")}/integrations/shiprocket/${store.id}/order-webhook?token=${fast.webhookToken}`
+        : "",
+      hasLoyaltyReward: fast?.enabled ? !!(await db.reward.findFirst({ where: { storeId: store.id, type: "CUSTOM_AMOUNT", active: true } })) : true,
       heading: fast?.config?.heading || "Use your points",
       logoUrl: fast?.config?.logoUrl || "",
       ips: (fast?.config?.allowedIps || []).join(", "),
@@ -557,10 +562,17 @@ function FastCheckout({ fc }) {
 
 Please enable loyalty-points redemption on our checkout using our loyalty app's API.
 
-Lookup (POST): ${fc.base}/lookup   body: {"phone": "<verified phone>", "email": "<optional>"}
-Redeem (POST): ${fc.base}/redeem   body: {"phone": "...", "rewardId": "<offer id>", "points": <only for custom amounts>, "requestId": "<unique per attempt>"}
-Auth: header  x-api-key: ${fc.key || "<secret key>"}
-The redeem call returns a single-use Shopify discount code (and its value) to apply to the order.`;
+Loyalty Points Manager (your spec):
+  Fetch Loyalty Points (POST): ${fc.base}/loyalty/points   body: {"mobile_number": "...", "cart_value": 1000.00}
+  Block Points (POST):         ${fc.base}/loyalty/block    body: {"mobile_number": "...", "transactional_points": 50, "order_id": "..."}
+  Unblock Points (POST):       ${fc.base}/loyalty/unblock  body: {"order_id": "..."}
+  Order webhook (POST, register this exact URL): ${fc.orderWebhookUrl}
+Auth (points/block/unblock only): header  x-api-key: ${fc.key || "<secret key>"}
+
+Our own lookup/redeem (kept for custom-checkout widgets that use a Shopify discount code instead):
+  Lookup (POST): ${fc.base}/lookup   body: {"phone": "<verified phone>", "email": "<optional>"}
+  Redeem (POST): ${fc.base}/redeem   body: {"phone": "...", "rewardId": "<offer id>", "points": <only for custom amounts>, "requestId": "<unique per attempt>"}
+  Auth: header  x-api-key: ${fc.key || "<secret key>"}`;
   return (
     <s-stack gap="base">
       <s-stack direction="inline" gap="small" alignItems="center">
@@ -569,9 +581,16 @@ The redeem call returns a single-use Shopify discount code (and its value) to ap
       </s-stack>
       <s-paragraph>
         Fast-checkout apps like Shiprocket Checkout (fastrr) replace the Shopify checkout page, so the widget and a pasted code can&apos;t run there.
-        Instead, their server asks us if the shopper (identified by the phone number they just verified) has points, shows your offers, and applies
-        the discount code we create when they redeem. Turn this on, then send the details below to Shiprocket&apos;s checkout support — they enable it on their side.
+        Their own API spec ("Loyalty Points Manager") calls us by mobile number as their checkout runs: it fetches the balance, blocks the points the
+        shopper chose to use against their own order id, and tells us by webhook whether that order succeeded. Turn this on, then send the details
+        below to Shiprocket&apos;s checkout support — they enable it on their side.
       </s-paragraph>
+      {fc.enabled && !fc.hasLoyaltyReward && (
+        <s-banner tone="warning">
+          Add a &quot;Customer picks points&quot; reward below (Ways to spend points) so Shiprocket knows the points→currency rate. Without one, Fetch/Block Points
+          will report 0 applicable points.
+        </s-banner>
+      )}
       <fetcher.Form method="post">
         <input type="hidden" name="intent" value="fast-save" />
         <s-stack gap="base">
@@ -601,8 +620,12 @@ The redeem call returns a single-use Shopify discount code (and its value) to ap
         <s-stack gap="small">
           <s-heading>Send this to Shiprocket</s-heading>
           <s-text-field label="Secret key (keep private)" value={fc.key} readOnly />
-          <s-text-field label="Lookup URL" value={`${fc.base}/lookup`} readOnly />
-          <s-text-field label="Redeem URL" value={`${fc.base}/redeem`} readOnly />
+          <s-text-field label="Fetch Loyalty Points URL" value={`${fc.base}/loyalty/points`} readOnly />
+          <s-text-field label="Block Points URL" value={`${fc.base}/loyalty/block`} readOnly />
+          <s-text-field label="Unblock Points URL" value={`${fc.base}/loyalty/unblock`} readOnly />
+          <s-text-field label="Order webhook URL (register exactly this, token included)" value={fc.orderWebhookUrl} readOnly />
+          <s-text-field label="Lookup URL (custom-checkout widgets only)" value={`${fc.base}/lookup`} readOnly />
+          <s-text-field label="Redeem URL (custom-checkout widgets only)" value={`${fc.base}/redeem`} readOnly />
           <s-text-area label="Ready-to-send message" value={brief} rows={9} readOnly />
         </s-stack>
       )}

@@ -69,6 +69,7 @@ model Store {
   referrals      Referral[]
   integrations   Integration[]
   emailTemplates EmailTemplate[]
+  loyaltyPointsBlocks LoyaltyPointsBlock[]
 }
 
 enum EarnTrigger {
@@ -184,6 +185,7 @@ model Customer {
   sessions         LoyaltySession[]
   referralsMade    Referral[]          @relation("Referrer")
   referralReceived Referral?           @relation("Referee")
+  loyaltyPointsBlocks LoyaltyPointsBlock[]
 
   @@unique([storeId, shopifyCustomerId])
   // One loyalty account per email per store (OTP accounts have no Shopify id yet).
@@ -402,6 +404,37 @@ model Redemption {
   updatedAt         DateTime         @updatedAt
 
   @@unique([storeId, code])
+  @@index([storeId, customerId])
+}
+
+// ---------------------------------------------------------------------------------------
+// Shiprocket/fastrr "Loyalty Points Manager" — their checkout blocks points on a cart,
+// then confirms or releases them once the order finishes (see app/services/fastrrLoyalty.server.js).
+// ---------------------------------------------------------------------------------------
+
+enum LoyaltyBlockStatus {
+  BLOCKED // points debited, order outcome not known yet
+  CONFIRMED // order webhook reported success; debit stands
+  RELEASED // unblocked, or order webhook reported failure; points refunded
+}
+
+model LoyaltyPointsBlock {
+  id               String             @id @default(cuid())
+  storeId          String
+  store            Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customerId       String
+  customer         Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  // Fastrr/Shiprocket's own order id for this checkout (sent to Block/Unblock Points and the order webhook).
+  orderId          String
+  points           Int
+  discountValue    Decimal            @db.Decimal(12, 2)
+  redemptionFactor Decimal            @db.Decimal(12, 4)
+  status           LoyaltyBlockStatus @default(BLOCKED)
+  transactionId    String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@unique([storeId, orderId])
   @@index([storeId, customerId])
 }
 
