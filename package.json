@@ -44,6 +44,7 @@
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {
+    "@flydotio/dockerfile": "^0.7.15",
     "@shopify/api-codegen-preset": "^1.2.0",
     "@shopify/polaris-types": "^2.0.0",
     "@types/eslint": "^9.6.1",
