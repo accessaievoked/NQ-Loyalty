@@ -52,6 +52,9 @@ export const loader = async ({ request }) => {
       milestones: Array.isArray(r.milestones) ? r.milestones : [],
       notify: r.notify,
       combine: r.combine,
+      creditWhen: r.creditWhen,
+      holdDays: r.holdDays,
+      expiryDays: r.expiryDays,
       updatedAt: stamp(r.updatedAt),
     })),
     rewards: rewards.map((r) => ({
@@ -109,6 +112,9 @@ export const action = async ({ request }) => {
         minOrderAmount: Math.max(0, Number(f.get("minOrderAmount")) || 0),
         notify: f.get("notify") !== "off",
         combine: f.get("combine") !== "off",
+        creditWhen: TRIGGERS[String(f.get("creditWhen"))] ? String(f.get("creditWhen")) : "PAID",
+        holdDays: int(f.get("holdDays"), 0, 365),
+        expiryDays: int(f.get("expiryDays"), 0, 3650),
         maxPoints: type === "PURCHASE_PER_CURRENCY" ? Math.max(0, Math.floor(Number(f.get("maxPoints")) || 0)) || null : null,
         active: f.get("active") !== "off",
       };
@@ -179,10 +185,11 @@ export const action = async ({ request }) => {
           const maxRaw = String(f.get(`rangeMax:${row}`) ?? "").trim();
           const max = maxRaw === "" ? null : Math.max(min, Number(maxRaw) || 0);
           const modeRaw = f.get(`rangeMode:${row}`);
-          const mode = modeRaw === "POINTS" ? "POINTS" : modeRaw === "PERCENT" ? "PERCENT" : "ALL";
+          const mode = modeRaw === "POINTS" ? "POINTS" : modeRaw === "PERCENT" ? "PERCENT" : modeRaw === "AMOUNT" ? "AMOUNT" : "ALL";
           let limit = Math.max(0, Number(f.get(`rangeLimit:${row}`)) || 0);
           if (mode === "PERCENT") limit = Math.min(100, limit);
           else if (mode === "POINTS") limit = Math.floor(limit);
+          else if (mode === "AMOUNT") limit = Math.round(limit * 100) / 100;
           else limit = 0;
           if (limit > 0 || mode === "ALL") ranges.push({ min, max, mode: limit > 0 || mode !== "ALL" ? mode : "ALL", limit });
         }
@@ -192,6 +199,8 @@ export const action = async ({ request }) => {
       if (!data.name) return { error: "Give it a name" };
       if (id) await db.reward.updateMany({ where: { id, storeId: store.id }, data });
       else await db.reward.create({ data: { ...data, storeId: store.id } });
+      // One point value for every spending rule (see fastrrLoyalty.server.js).
+      await db.reward.updateMany({ where: { storeId: store.id, type: "CUSTOM_AMOUNT" }, data: { value: data.value, pointsCost: data.pointsCost } });
       return { ok: "Saved" };
     }
     if (intent === "reward-toggle") {
@@ -295,6 +304,7 @@ function rewardSummary(r, money) {
 
 // Ready-made starting points. Amounts are in the store's currency, scaled to something sensible.
 function presets(currency) {
+  const amountOff = currency === "INR" ? 100 : currency === "JPY" ? 500 : 5;
   const big = currency === "INR" ? 1000 : currency === "JPY" ? 5000 : 50;
   return {
     earn: [
@@ -325,9 +335,27 @@ function presets(currency) {
     redeem: [
       {
         key: "cart",
-        title: "Redeem on cart value",
-        text: "Customers use their points in Shiprocket checkout and the amount comes off the cart automatically. You choose what 1 point is worth and how much of a cart points can pay for.",
+        title: "Based on cart value",
+        text: "Choose how much of a cart points can pay for, by cart value (for example carts from ₹500 to ₹1,000 can use up to 50%). Starts with any cart able to use all of a customer's points.",
         reward: { name: "Redeem on cart value", type: "CUSTOM_AMOUNT", value: 1, pointsCost: 1, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 0 },
+      },
+      {
+        key: "amount",
+        title: "Amount discount",
+        text: "Points can take a set amount off a cart, at most. Example: up to ₹100 off any cart.",
+        reward: {
+          name: "Amount off the cart", type: "CUSTOM_AMOUNT", value: 1, pointsCost: 1, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 0,
+          "rangeMin:0": 0, "rangeMax:0": "", "rangeMode:0": "AMOUNT", "rangeLimit:0": amountOff,
+        },
+      },
+      {
+        key: "percent",
+        title: "Percentage off",
+        text: "Points can take a percentage off a cart, at most. Example: up to 10% of any cart.",
+        reward: {
+          name: "Percent off the cart", type: "CUSTOM_AMOUNT", value: 1, pointsCost: 1, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 0,
+          "rangeMin:0": 0, "rangeMax:0": "", "rangeMode:0": "PERCENT", "rangeLimit:0": 10,
+        },
       },
     ],
   };
@@ -631,7 +659,7 @@ function StatusPanel({ active, onChange }) {
 
 const rangeText = (rg, money) => {
   const to = rg.max == null || rg.max === "" ? "no upper limit" : money(Number(rg.max));
-  const what = rg.mode === "ALL" ? "all their points" : rg.mode === "POINTS" ? `up to ${pts(Number(rg.limit))}` : `up to ${rg.limit}% of the cart`;
+  const what = rg.mode === "ALL" ? "all their points" : rg.mode === "POINTS" ? `up to ${pts(Number(rg.limit))}` : rg.mode === "AMOUNT" ? `up to ${money(Number(rg.limit))} off` : `up to ${rg.limit}% of the cart`;
   return `Cart ${money(Number(rg.min) || 0)} to ${to}: ${what}`;
 };
 
@@ -658,9 +686,10 @@ function RangesEditor({ ranges, onChange, currency }) {
               <s-option value="ALL">All their points</s-option>
               <s-option value="POINTS">A set number of points</s-option>
               <s-option value="PERCENT">A percent of the cart</s-option>
+              <s-option value="AMOUNT">A set amount off</s-option>
             </s-select>
             {r.mode !== "ALL" && (
-              <s-number-field label={r.mode === "POINTS" ? "Most points" : "Most percent of cart"} min="0" value={String(r.limit)} onChange={(e) => update(i, { limit: e.currentTarget.value })} />
+              <s-number-field label={r.mode === "POINTS" ? "Most points" : r.mode === "AMOUNT" ? `Most off (${currency})` : "Most percent of cart"} min="0" step="any" value={String(r.limit)} onChange={(e) => update(i, { limit: e.currentTarget.value })} />
             )}
           </s-grid>
           <input type="hidden" name={`rangeMin:${i}`} value={r.min} />
@@ -686,6 +715,11 @@ function ruleSummaryLines(rule, money) {
   if (PURCHASE_TYPES.includes(rule.type)) {
     lines.push(rule.combine ? "Adds to points from other earning rules" : "Doesn't add to other rules: the customer gets the larger of this and the others");
   }
+  if (PURCHASE_TYPES.includes(rule.type)) {
+    const when = TRIGGERS[rule.creditWhen] || TRIGGERS.PAID;
+    lines.push(`Credited when: ${when.toLowerCase()}${rule.holdDays > 0 ? `, then ${rule.holdDays} day${rule.holdDays === 1 ? "" : "s"} later` : ""}`);
+  }
+  lines.push(rule.expiryDays > 0 ? `Points expire after ${rule.expiryDays} day${rule.expiryDays === 1 ? "" : "s"}` : "Points never expire");
   lines.push(rule.notify ? "The customer is emailed when this gives them points" : "No email is sent for this rule");
   lines.push(rule.active ? "Active" : "Inactive: not applied to new orders");
   return lines;
@@ -760,6 +794,29 @@ function RuleRow({ rule, currency, money }) {
                       />
                     )}
                   </s-grid>
+                </Panel>
+                <Panel title="When points arrive and how long they last">
+                  <s-grid gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap="base">
+                    {isPurchase ? (
+                      <>
+                        <s-select label="Credit points when" name="creditWhen" value={rule.creditWhen} details="Which order status releases the points.">
+                          {Object.entries(TRIGGERS).map(([k, v]) => (
+                            <s-option key={k} value={k}>{v}</s-option>
+                          ))}
+                        </s-select>
+                        <s-number-field label="Wait after that (days)" name="holdDays" min="0" step="1" value={String(rule.holdDays)} details="Your return window. 0 = straight away." />
+                      </>
+                    ) : (
+                      <s-text color="subdued">{RULE_WHEN[rule.type]}</s-text>
+                    )}
+                    <s-number-field label="Points expire after (days)" name="expiryDays" min="0" step="1" value={String(rule.expiryDays)} details="0 = never expire. Customers get a reminder email first." />
+                  </s-grid>
+                  {isPurchase && (
+                    <p style={{ ...MUTED, margin: "10px 0 0" }}>
+                      If several rules pay on the same order, its points arrive together once the latest of their statuses is reached (and the longest wait has
+                      passed). Each rule&apos;s points still expire on that rule&apos;s own schedule.
+                    </p>
+                  )}
                 </Panel>
                 {isMilestone && (
                   <Panel title="Points by order number">
@@ -1016,15 +1073,13 @@ const EARN_GROUPS = [
   { title: "Referrals", keys: ["ref-friend", "ref-owner"] },
 ];
 const EARN_ICON = { spend: "cart", fixed: "tag", big: "tag", milestone: "steps", welcome: "user", review: "star", "ref-friend": "gift", "ref-owner": "gift" };
-const REDEEM_ICON = { cart: "cart" };
+const REDEEM_ICON = { cart: "cart", amount: "tag", percent: "percent" };
 
 export default function Rules() {
-  const { settings, rules, rewards, currency, judgeme, fastCheckout } = useLoaderData();
+  const { rules, rewards, currency, judgeme, fastCheckout } = useLoaderData();
   const money = useMoney(currency);
-  const settingsFetcher = useFetcher();
   const adder = useFetcher();
   const [picker, setPicker] = useState(null); // "earn" | "spend" | null
-  useToast(settingsFetcher);
   useToast(adder);
   const p = presets(currency);
   const busy = adder.state !== "idle";
@@ -1034,7 +1089,10 @@ export default function Rules() {
     setPicker(null);
   };
   const addReward = (preset) => {
-    adder.submit({ intent: "reward-save", ...toForm({ ...preset.reward, active: true }) }, { method: "post" });
+    // Every spending rule shares one point value, so a new rule starts with the existing one.
+    const first = rewards[0];
+    const rate = first && first.pointsCost > 0 ? first.value / first.pointsCost : preset.reward.value;
+    adder.submit({ intent: "reward-save", ...toForm({ ...preset.reward, value: rate, pointsCost: 1, active: true }) }, { method: "post" });
     setPicker(null);
   };
   const reviewRule = rules.find((r) => r.type === "REVIEW");
@@ -1044,7 +1102,7 @@ export default function Rules() {
     items: g.keys.map((k) => ({ ...p.earn.find((e) => e.key === k), icon: EARN_ICON[k] })),
   }));
   const spendGroups = [{ title: "Ways to spend", items: p.redeem.map((x) => ({ ...x, icon: REDEEM_ICON[x.key] })) }];
-  const spendTaken = () => rewards.length > 0; // one cart-value rule is enough
+  const spendTaken = () => false;
   const earnTaken = (it) => SINGLETON.includes(it.rule.type) && rules.some((r) => r.type === it.rule.type);
 
   return (
@@ -1073,10 +1131,10 @@ export default function Rules() {
 
         <SectionRow
           title="Ways to spend points"
-          text="Choose what a point is worth and how much of a cart points can pay for, by cart value. In Shiprocket checkout the customer's points come off the cart on their own: no codes."
-          action={<s-button variant="primary" disabled={rewards.length > 0 || undefined} onClick={() => setPicker("spend")}>Add a way to spend</s-button>}
+          text="Choose what a point is worth and how much of a cart points can pay for: by cart value, a set amount, or a percentage. In Shiprocket checkout the customer's points come off the cart on their own: no codes."
+          action={<s-button variant="primary" onClick={() => setPicker("spend")}>Add a way to spend</s-button>}
         >
-          <Card title="Spending rules" note={fastCheckout.enabled ? "Points are used in Shiprocket checkout, on the cart." : "Shiprocket checkout is off, so customers can't spend points yet. Turn it on in the Shiprocket section below."}>
+          <Card title="Spending rules" note={fastCheckout.enabled ? "Points are used in Shiprocket checkout, on the cart. All spending rules share one point value; if more than one fits a cart, the one that lets the customer use the most points applies." : "Shiprocket checkout is off, so customers can't spend points yet. Turn it on in the Shiprocket section below."}>
             {rewards.length === 0 ? (
               <EmptyRow>No spending rule yet. Customers can't use points until you add one.</EmptyRow>
             ) : (
@@ -1104,37 +1162,6 @@ export default function Rules() {
             <div style={{ padding: 16 }}>
               <FastCheckout fc={fastCheckout} />
             </div>
-          </Card>
-        </SectionRow>
-
-        <SectionRow
-          title="When points are credited"
-          text="Choose when points reach a customer's balance, how long they last, and the smallest balance needed before they can redeem."
-        >
-          <Card>
-            <settingsFetcher.Form method="post">
-              <input type="hidden" name="intent" value="settings" />
-              <div style={{ padding: 16 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 16, alignItems: "start" }}>
-                  <s-select label="Credit points when" name="earnTrigger" value={settings.earnTrigger} details="Which order status releases the points.">
-                    {Object.entries(TRIGGERS).map(([k, v]) => (
-                      <s-option key={k} value={k}>{v}</s-option>
-                    ))}
-                  </s-select>
-                  <s-number-field label="Wait after that (days)" name="holdDays" min="0" step="1" value={String(settings.holdDays)} details="Your return window. 0 = straight away." />
-                  <s-number-field label="Points expire after (days)" name="expiryDays" min="0" step="1" value={String(settings.expiryDays)} details="0 = never expire." />
-                  <s-number-field label="Smallest balance to redeem" name="minRedeemPoints" min="0" step="1" value={String(settings.minRedeemPoints)} details="Points needed before spending." />
-                </div>
-                <p style={{ margin: "16px 0 0", fontSize: 12.5, color: "#6b7280", lineHeight: 1.55 }}>
-                  <b>Returns and refunds:</b> while a return is open, points are held back. If the return completes, that order's points are cancelled
-                  (or taken back if already credited). If it is declined or cancelled, points carry on as normal. A refund reduces points in proportion.
-                  Delivery and return status come straight from Shopify.
-                </p>
-              </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", padding: "10px 16px", borderTop: "1px solid #eceef1", background: "#fafafa" }}>
-                <s-button type="submit" variant="primary" loading={settingsFetcher.state !== "idle" || undefined}>Save</s-button>
-              </div>
-            </settingsFetcher.Form>
           </Card>
         </SectionRow>
       </div>

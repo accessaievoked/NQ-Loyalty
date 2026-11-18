@@ -44,19 +44,22 @@ export function describeReward(r, currency) {
 }
 
 export function earnLines(rules, settings, currency) {
-  const when =
-    settings.earnTrigger === "PAID" ? "payment" : settings.earnTrigger === "FULFILLED" ? "fulfilment" : "delivery";
-  const timing =
-    settings.holdDays > 0
-      ? `Credited ${plural(settings.holdDays, "day")} after ${when}`
-      : `Credited as soon as the order is ${settings.earnTrigger.toLowerCase()}`;
+  // Each rule has its own status, wait and expiry, so the wording is per rule.
+  const timingOf = (r) => {
+    const when = r.creditWhen === "FULFILLED" ? "fulfilment" : r.creditWhen === "DELIVERED" ? "delivery" : "payment";
+    const credit =
+      r.holdDays > 0
+        ? `Credited ${plural(r.holdDays, "day")} after ${when}`
+        : `Credited as soon as the order is ${(r.creditWhen || "PAID").toLowerCase()}`;
+    return r.expiryDays > 0 ? `${credit} · Points last ${plural(r.expiryDays, "day")}` : credit;
+  };
   return rules
     .filter((r) => r.active)
     .map((r) => {
       if (r.type === "PURCHASE_PER_CURRENCY")
-        return { text: "Place an order", detail: `${plural(r.value, "point")} for every ${fmtMoney(1, currency)} spent · ${timing}` };
+        return { text: "Place an order", detail: `${plural(r.value, "point")} for every ${fmtMoney(1, currency)} spent · ${timingOf(r)}` };
       if (r.type === "PURCHASE_FIXED")
-        return { text: "Place an order", detail: `${plural(r.value, "point")} per order · ${timing}` };
+        return { text: "Place an order", detail: `${plural(r.value, "point")} per order · ${timingOf(r)}` };
       if (r.type === "REFERRAL_FRIEND")
         return { text: "Use a friend's referral code", detail: `${plural(r.value, "bonus point")} on your first order` };
       if (r.type === "REFERRAL_REFERRER")

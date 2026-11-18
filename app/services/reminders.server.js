@@ -29,7 +29,7 @@ export async function expiringBatches(storeId, reminderDays, now = new Date()) {
  */
 export async function sendExpiryReminders(now = new Date()) {
   const stores = await prisma.storeSettings.findMany({
-    where: { emailsEnabled: true, notifyExpiring: true, expiryDays: { gt: 0 }, store: { uninstalledAt: null } },
+    where: { emailsEnabled: true, notifyExpiring: true, store: { uninstalledAt: null } },
     select: { storeId: true, expiryReminderDays: true },
   });
 

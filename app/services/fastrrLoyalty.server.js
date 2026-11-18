@@ -22,6 +22,25 @@ async function pickLoyaltyReward(storeId) {
   return prisma.reward.findFirst({ where: { storeId, type: "CUSTOM_AMOUNT", active: true }, orderBy: { createdAt: "asc" } });
 }
 
+// A store can have several spending rules (cart value, amount off, percent off). They all share ONE point
+// value (saving one rule updates the others), so the rate Shiprocket is quoted never depends on which rule
+// applied. For a cart, the rule that lets the customer use the most points wins.
+async function loadSpendRules(storeId) {
+  return prisma.reward.findMany({ where: { storeId, type: "CUSTOM_AMOUNT", active: true }, orderBy: { createdAt: "asc" } });
+}
+
+function bestApplicable(rules, balance, cartValue) {
+  return rules.reduce((best, r) => Math.max(best, applicablePoints(r, balance, cartValue)), 0);
+}
+
+// Block doesn't get the cart value, so check the points against what at least one rule allows.
+function pointsAllowedByAnyRule(rules, points) {
+  return rules.some((r) => {
+    const step = r.pointsCost;
+    return points % step === 0 && points >= Math.max(step, r.minPoints || 0) && (!r.maxPoints || points <= r.maxPoints);
+  });
+}
+
 // Cart-value limits (see Reward.cartRanges): if any are set, points can only be used on a cart that
 // falls in one of the ranges, up to that range's limit (a share of the cart, or a fixed number of points).
 function rangeLimit(reward, cartValue, step, unitValue) {
@@ -33,6 +52,7 @@ function rangeLimit(reward, cartValue, step, unitValue) {
   if (hit.mode === "ALL") return Infinity;
   const limit = Number(hit.limit) || 0;
   if (hit.mode === "POINTS") return limit;
+  if (hit.mode === "AMOUNT") return Math.floor(limit / unitValue) * step;
   return Math.floor((cart * Math.min(limit, 100)) / 100 / unitValue) * step;
 }
 
@@ -52,12 +72,11 @@ function applicablePoints(reward, balance, cartValue) {
 export async function fetchLoyaltyPoints(store, { mobile_number, cart_value }) {
   const customer = await findCustomerByContact(store.id, { phone: mobile_number });
   const balance = customer?.pointsBalance || 0;
-  const reward = customer ? await pickLoyaltyReward(store.id) : null;
-  const smallestBalance = store.settings?.minRedeemPoints || 0;
+  const rules = customer ? await loadSpendRules(store.id) : [];
   return {
     mobile_number: String(mobile_number),
     available_points: balance,
-    applicable_points: customer && balance >= smallestBalance ? applicablePoints(reward, balance, cart_value) : 0,
+    applicable_points: customer ? bestApplicable(rules, balance, cart_value) : 0,
   };
 }
 
@@ -94,10 +113,8 @@ export async function blockPoints(store, { mobile_number, transactional_points, 
 
   const step = reward.pointsCost;
   if (points % step !== 0) return { status: false, message: `transactional_points must be a multiple of ${step}`, available_points: customer.pointsBalance };
-  const min = Math.max(step, reward.minPoints || 0);
-  if (points < min) return { status: false, message: `Minimum is ${min} points`, available_points: customer.pointsBalance };
-  if (reward.maxPoints && points > reward.maxPoints) {
-    return { status: false, message: `Maximum is ${reward.maxPoints} points per order`, available_points: customer.pointsBalance };
+  if (!pointsAllowedByAnyRule(await loadSpendRules(store.id), points)) {
+    return { status: false, message: "That many points can't be used on an order", available_points: customer.pointsBalance };
   }
   if (customer.pointsBalance < points) return { status: false, message: "Not enough points", available_points: customer.pointsBalance };
 

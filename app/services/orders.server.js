@@ -35,20 +35,41 @@ function rulePoints(r, amount, orderNumber) {
   return 0;
 }
 
+const STAGES = ["PAID", "FULFILLED", "DELIVERED"];
+
 // What an order earns from all the active purchase rules. Rules that "combine" (the default) add up.
 // A rule that doesn't combine can't be added to the others: the customer gets that rule's points or
 // the combined total of the rest, whichever is more.
+//
+// Each rule has its own "credit when" status, wait and expiry. One order has one award, so when
+// several rules pay on the same order the points arrive together once the LATEST of their statuses is
+// reached and the longest wait has passed; each rule's points still expire on that rule's own schedule
+// (returned as `parts`, grouped by expiry).
 export function computeOrderPoints(rules, amount, orderNumber) {
-  let stacked = 0;
-  let bestAlone = 0;
+  const entries = [];
   for (const r of rules) {
     if (!r.active) continue;
     const pts = rulePoints(r, amount, orderNumber);
-    if (pts <= 0) continue;
-    if (r.combine === false) bestAlone = Math.max(bestAlone, pts);
-    else stacked += pts;
+    if (pts > 0) entries.push({ pts, rule: r });
   }
-  return Math.max(stacked, bestAlone);
+  const stacked = entries.filter((e) => e.rule.combine !== false);
+  const stackedTotal = stacked.reduce((sum, e) => sum + e.pts, 0);
+  const alone = entries.filter((e) => e.rule.combine === false).sort((p, q) => q.pts - p.pts)[0];
+  const chosen = alone && alone.pts > stackedTotal ? [alone] : stacked;
+
+  const points = chosen.reduce((sum, e) => sum + e.pts, 0);
+  let creditWhen = "PAID";
+  let holdDays = 0;
+  const byExpiry = new Map();
+  for (const e of chosen) {
+    const stage = e.rule.creditWhen || "PAID";
+    if (STAGES.indexOf(stage) > STAGES.indexOf(creditWhen)) creditWhen = stage;
+    holdDays = Math.max(holdDays, e.rule.holdDays || 0);
+    const days = e.rule.expiryDays || 0;
+    byExpiry.set(days, (byExpiry.get(days) || 0) + e.pts);
+  }
+  const parts = [...byExpiry].map(([expiryDays, p]) => ({ expiryDays, points: p }));
+  return { points, parts, creditWhen, holdDays };
 }
 
 // How many of the customer's other orders already reached the earn trigger before this one —
@@ -247,6 +268,13 @@ export async function cancelOrderPoints(store, order, label = "Cancelled") {
 // What was actually credited for this award. It can be less than `award.points`: a refund that
 // happened while the points were on hold lowered the credit at release time.
 async function creditedFor(store, award) {
+  if (Array.isArray(award.parts) && award.parts.length) {
+    const sum = await prisma.pointsTransaction.aggregate({
+      where: { storeId: store.id, idempotencyKey: { startsWith: `award:${award.id}:` } },
+      _sum: { points: true },
+    });
+    return Math.max(0, sum._sum.points ?? 0);
+  }
   const earn = await prisma.pointsTransaction.findUnique({
     where: { storeId_idempotencyKey: { storeId: store.id, idempotencyKey: `award:${award.id}` } },
     select: { points: true },
@@ -295,12 +323,6 @@ async function markRedemptionsUsed(storeId, order) {
 /** Create the award once the configured status has been reached. Idempotent per order. */
 export async function evaluateOrder(store, order) {
   if (order.cancelledAt || order.returnedAt || order.returnStatus === "CLOSED" || !order.customerId) return null;
-  const settings = store.settings ?? (await prisma.storeSettings.findUnique({ where: { storeId: store.id } }));
-  if (!settings) return null;
-
-  const reachedAt = { PAID: order.paidAt, FULFILLED: order.fulfilledAt, DELIVERED: order.deliveredAt }[settings.earnTrigger];
-  if (!reachedAt) return null;
-
   const existing = await prisma.pointsAward.findUnique({ where: { orderId: order.id } });
   if (existing) return existing;
 
@@ -310,14 +332,18 @@ export async function evaluateOrder(store, order) {
   const eligibleAmount = money(order.eligibleAmount);
   const needsOrderNumber = rules.some((r) => r.type === "ORDER_MILESTONE");
   const orderNumber = needsOrderNumber ? 1 + (await priorEligibleOrderCount(store.id, order.customerId, order)) : 0;
-  const points = computeOrderPoints(rules, eligibleAmount, orderNumber);
-  if (points <= 0) return null;
+  const calc = computeOrderPoints(rules, eligibleAmount, orderNumber);
+  if (calc.points <= 0) return null;
 
-  const releaseAt = new Date(reachedAt.getTime() + settings.holdDays * DAY);
+  // Wait for the latest status any of the paying rules asks for; a later event re-checks.
+  const reachedAt = { PAID: order.paidAt, FULFILLED: order.fulfilledAt, DELIVERED: order.deliveredAt }[calc.creditWhen];
+  if (!reachedAt) return null;
+  const points = calc.points;
+  const releaseAt = new Date(reachedAt.getTime() + calc.holdDays * DAY);
   let award;
   try {
     award = await prisma.pointsAward.create({
-      data: { storeId: store.id, customerId: order.customerId, orderId: order.id, points, releaseAt },
+      data: { storeId: store.id, customerId: order.customerId, orderId: order.id, points, parts: calc.parts, releaseAt },
     });
   } catch (e) {
     if (e?.code === "P2002") return prisma.pointsAward.findUnique({ where: { orderId: order.id } });
@@ -362,24 +388,40 @@ export async function releaseAward(awardId) {
     return null;
   }
 
-  let result;
+  // One ledger entry per expiry schedule (older awards have no `parts`: one entry, store-wide expiry).
+  const parts = Array.isArray(award.parts) && award.parts.length ? award.parts : null;
+  const split = parts
+    ? parts.map((p, i) => ({ key: `award:${award.id}:${i}`, points: Math.floor(p.points * keep), days: p.expiryDays || 0 })).filter((p) => p.points > 0)
+    : [{ key: `award:${award.id}`, points, days: settings?.expiryDays ?? 0 }];
+  if (!split.length) {
+    await prisma.pointsAward.update({ where: { id: awardId }, data: { status: "CANCELLED", releasedAt: null } });
+    return null;
+  }
+  const results = [];
   try {
-    result = await postTransaction({
-      storeId: award.storeId,
-      customerId: award.customerId,
-      type: "EARN",
-      points,
-      source: "order",
-      idempotencyKey: `award:${award.id}`,
-      orderId: award.orderId,
-      expiresAt: expiryDate(settings?.expiryDays ?? 0),
-      note: `Order ${award.order.orderName ?? award.order.shopifyOrderId}`,
-    });
+    for (const p of split) {
+      results.push(
+        await postTransaction({
+          storeId: award.storeId,
+          customerId: award.customerId,
+          type: "EARN",
+          points: p.points,
+          source: "order",
+          idempotencyKey: p.key,
+          orderId: award.orderId,
+          expiresAt: expiryDate(p.days),
+          note: `Order ${award.order.orderName ?? award.order.shopifyOrderId}`,
+        })
+      );
+    }
   } catch (e) {
-    // Posting failed: put the award back so the job retry / sweeper can try again.
+    // Posting failed: put the award back so the job retry / sweeper can try again (keys make it safe).
     await prisma.pointsAward.updateMany({ where: { id: awardId, status: "RELEASED" }, data: { status: "PENDING", releasedAt: null } });
     throw e;
   }
+  const result = results[results.length - 1];
+  const earliestExpiry = results.map((r) => r.transaction.expiresAt).filter(Boolean).sort((p, q) => p - q)[0];
+  const creditedTotal = split.reduce((sum, p) => sum + p.points, 0);
 
   // Email only if at least one of the purchase rules has its "email the customer" switch on.
   const purchaseRules = await prisma.earnRule.findMany({
@@ -387,17 +429,17 @@ export async function releaseAward(awardId) {
     select: { notify: true },
   });
   const notifyOn = purchaseRules.length === 0 || purchaseRules.some((r) => r.notify);
-  if (!result.duplicate && notifyOn) {
+  if (results.some((r) => !r.duplicate) && notifyOn) {
     await notifyCustomer({
       storeId: award.storeId,
       customerId: award.customerId,
       kind: "points_earned",
       dedupeKey: `earned:${award.id}`,
       data: {
-        points,
+        points: creditedTotal,
         balance: result.transaction.balanceAfter,
         reason: `your order ${award.order.orderName ?? ""} earned points`.replace("  ", " "),
-        expiresAt: result.transaction.expiresAt ? result.transaction.expiresAt.toISOString().slice(0, 10) : null,
+        expiresAt: earliestExpiry ? earliestExpiry.toISOString().slice(0, 10) : null,
       },
     });
   }

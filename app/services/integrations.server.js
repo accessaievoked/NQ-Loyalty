@@ -144,6 +144,7 @@ export async function processReview(store, review) {
     key: `review:${customer.id}:${productKey}`,
     reason: "thank you for your review",
     notify: rule.notify,
+    expiryDays: rule.expiryDays,
   });
   return result?.duplicate ? "ignored: already rewarded for this product" : `rewarded ${rule.value} points`;
 }

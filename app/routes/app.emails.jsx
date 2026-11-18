@@ -51,7 +51,8 @@ export const loader = async ({ request }) => {
       expiryReminderDays: s.expiryReminderDays,
       senderName: s.senderName || "",
       replyTo: s.replyTo || "",
-      expiryDays: s.expiryDays,
+      // Expiry is set per earning rule now: show the longest one so the help text knows if anything expires.
+      expiryDays: (await db.earnRule.aggregate({ where: { storeId: store.id, active: true }, _max: { expiryDays: true } }))._max.expiryDays ?? 0,
     },
   };
 };
@@ -207,7 +208,7 @@ function EmailSettings({ settings, smtp, queue }) {
       <Toggle label="Points expiring soon" checked={s.notifyExpiring} onChange={(v) => set({ notifyExpiring: v })} />
       <Row
         label="Warn this many days before points expire"
-        help={s.expiryDays === 0 ? "Your points currently never expire (set an expiry on the Rules page), so no reminders go out." : "Customers get one reminder email per batch of expiring points."}
+        help={s.expiryDays === 0 ? "None of your earning rules expire points yet (set “Points expire after” on a rule under Rules), so no reminders go out." : "Customers get one reminder email per batch of expiring points."}
       >
         <input className="ed-input" type="number" min={1} max={90} value={s.expiryReminderDays} onChange={(e) => set({ expiryReminderDays: Number(e.target.value) })} />
       </Row>

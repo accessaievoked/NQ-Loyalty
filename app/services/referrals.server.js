@@ -142,6 +142,7 @@ export async function maybeRewardReferral(award, order) {
         reason: "Referral bonus on your first order",
         orderId: order.id,
         notify: rules.friend.notify,
+        expiryDays: rules.friend.expiryDays,
       });
     }
     if (rules.referrer) {
@@ -154,6 +155,7 @@ export async function maybeRewardReferral(award, order) {
         reason: "A friend you referred placed their first order",
         orderId: order.id,
         notify: rules.referrer.notify,
+        expiryDays: rules.referrer.expiryDays,
       });
     }
   } catch (e) {

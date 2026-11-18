@@ -273,6 +273,12 @@ model EarnRule {
   // when this order is the customer's 1st, 2nd, … eligible order. An order past the highest listed
   // number gets no bonus from this rule.
   milestones     Json?
+  // When this rule's points are credited: once the order reaches this status, plus holdDays. Order-based
+  // rules only; welcome, review and referral points are credited when the event happens.
+  creditWhen     EarnTrigger  @default(PAID)
+  holdDays       Int          @default(0)
+  // Days until the points this rule gives expire. 0 = never.
+  expiryDays     Int          @default(0)
   // Email the customer when this rule gives them points.
   notify         Boolean      @default(true)
   // Purchase rules only: true = this rule's points add to the other earning rules' points; false =
@@ -344,6 +350,8 @@ model PointsAward {
   orderId    String      @unique
   order      Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
   points     Int
+  // How the points split by expiry: [{"points":120,"expiryDays":0},{"points":50,"expiryDays":90}]. Null on older awards.
+  parts      Json?
   status     AwardStatus @default(PENDING)
   releaseAt  DateTime
   releasedAt DateTime?

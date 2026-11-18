@@ -108,6 +108,7 @@ export async function grantSignupBonus(customer) {
     key: `signup:${customer.id}`,
     reason: rule.name || "Welcome bonus",
     notify: rule.notify,
+    expiryDays: rule.expiryDays,
   });
 }
 

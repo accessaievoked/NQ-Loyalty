@@ -10,6 +10,10 @@ export const FONTS = {
     stack:
       'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
   },
+  poppins: {
+    label: "Poppins",
+    stack: 'Poppins, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+  },
   rounded: {
     label: "Rounded",
     stack:
@@ -254,6 +258,23 @@ const baseTheme = {
 };
 
 export const TEMPLATES = {
+  claura: {
+    label: "Claura",
+    description: "Soft pink on white with Poppins and 10px corners, matching claura.in.",
+    theme: {
+      ...baseTheme,
+      primary: "#ED6C84",
+      primaryText: "#ffffff",
+      background: "#ffffff",
+      surface: "#FDF0F3",
+      text: "#1A1A1A",
+      mutedText: "#6B6B6B",
+      border: "#F4D6DD",
+      headerStyle: "solid",
+      radius: 10,
+      font: "poppins",
+    },
+  },
   classic: {
     label: "Classic",
     description: "Clean white panel with a solid header.",
@@ -435,11 +456,11 @@ export const HTML_VARIABLES = [
   "{{expiring_date}}",
 ];
 
-export function defaultWidgetConfig(template = "classic") {
-  const t = TEMPLATES[template] ?? TEMPLATES.classic;
+export function defaultWidgetConfig(template = "claura") {
+  const t = TEMPLATES[template] ?? TEMPLATES.claura;
   return {
     version: 1,
-    template: TEMPLATES[template] ? template : "classic",
+    template: TEMPLATES[template] ? template : "claura",
     theme: { ...t.theme },
     launcher: { ...DEFAULT_LAUNCHER },
     // mode "blocks": the block list below. mode "html": `html` is the whole layout.
