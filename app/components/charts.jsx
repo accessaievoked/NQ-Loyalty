@@ -398,7 +398,9 @@ export function HBars({ items, color = COLORS.blue, format = whole, empty = "Not
       {items.map((i) => (
         <div key={i.label}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13, marginBottom: 5 }}>
-            <span style={{ color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.href ? <a href={i.href}>{i.label}</a> : i.label}</span>
+            <span style={{ color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {i.href ? <a href={i.href} style={{ color: "#111827", textDecoration: "none" }}>{i.label}</a> : i.label}
+            </span>
             <span style={{ color: "#111827", fontWeight: 600, flex: "none" }}>
               {format(i.value)}
               {i.sub ? <span style={{ color: AXIS, fontWeight: 400 }}> · {i.sub}</span> : null}
