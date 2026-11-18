@@ -97,6 +97,11 @@ export default function Home() {
       </s-button>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
+        <p style={{ margin: 0, fontSize: 14, color: "#374151", lineHeight: 1.55, maxWidth: 720 }}>
+          Your loyalty program at a glance. Customers earn points when they buy, then spend those points on discounts. Start with the setup steps
+          below; the charts fill in as orders come in.
+        </p>
+
         <details open={!setupDone} style={{ background: "#fff", border: "1px solid #e4e6ea", borderRadius: 14, padding: "14px 18px" }}>
           <summary style={{ cursor: "pointer", fontWeight: 650, fontSize: 15, listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>{setupDone ? "Setup" : "Finish setting up"}</span>
@@ -208,6 +213,15 @@ export default function Home() {
             )}
           </Panel>
         </Columns>
+
+        <Panel title="How it works" subtitle="The whole journey in four steps">
+          <ol style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: "#374151", lineHeight: 1.7 }}>
+            <li>A customer places an order in your store.</li>
+            <li>Once it is paid (or fulfilled or delivered, your choice), points are added to their balance following your <Link to="/app/rules" style={DARK_LINK}>Rules</Link>.</li>
+            <li>They spend points in your rewards widget and get a one-time discount code.</li>
+            <li>They paste the code at checkout and Shopify takes the amount off. That is all: no store credit, no gift cards.</li>
+          </ol>
+        </Panel>
       </div>
     </s-page>
   );

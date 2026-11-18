@@ -210,7 +210,7 @@ export const action = async ({ request }) => {
         allowedIps: f.get("allowedIps"),
         regenerateKey: intent === "fast-rotate",
       });
-      return { ok: intent === "fast-rotate" ? "New key created — the old one no longer works" : "Saved" };
+      return { ok: intent === "fast-rotate" ? "New key created. The old one no longer works" : "Saved" };
     }
     if (intent === "fast-off") {
       await disableFastCheckout(store.id);
@@ -299,13 +299,13 @@ function presets(currency) {
   const step = currency === "JPY" ? 100 : 1; // value of 100 points
   return {
     earn: [
-      { key: "spend", title: "Points for every purchase", text: "Customers earn points on what they spend, up to an optional cap per order.", rule: { name: "Points per order", type: "PURCHASE_PER_CURRENCY", value: 1, minOrderAmount: 0 } },
-      { key: "fixed", title: "Flat points every order", text: "The same fixed points on every order, regardless of its value.", rule: { name: "Points per order", type: "PURCHASE_FIXED", value: 50, minOrderAmount: 0 } },
-      { key: "big", title: "Bonus on big orders", text: "Extra fixed points, but only when an order is over a set amount.", rule: { name: "Big order bonus", type: "PURCHASE_FIXED", value: 100, minOrderAmount: big } },
+      { key: "spend", title: "Points for amount spent", text: "Customers earn points for every rupee or dollar they spend. You can cap the points per order.", rule: { name: "Points for amount spent", type: "PURCHASE_PER_CURRENCY", value: 1, minOrderAmount: 0 } },
+      { key: "fixed", title: "Flat points every order", text: "The same fixed points on every order, regardless of its value.", rule: { name: "Flat points per order", type: "PURCHASE_FIXED", value: 50, minOrderAmount: 0 } },
+      { key: "big", title: "Bonus on big orders", text: "Extra fixed points, only when an order is above an amount you choose.", rule: { name: "Big order bonus", type: "PURCHASE_FIXED", value: 100, minOrderAmount: big } },
       {
         key: "milestone",
         title: "Rewards by order number",
-        text: "Fixed points per order, regardless of its value, that depend on which order number this is for the customer — with a bonus that keeps going from some order onward.",
+        text: "Fixed points that depend on which order this is for the customer (1st, 2nd, 3rd...), plus an optional bonus that keeps going from a chosen order onward.",
         rule: {
           name: "Order rewards",
           type: "ORDER_MILESTONE",
@@ -362,7 +362,7 @@ function MilestoneEditor({ steps, onChange, currency }) {
     <s-stack gap="small">
       <s-text type="strong">Points by order number</s-text>
       <s-text color="subdued">
-        A fixed amount, regardless of the order's value (unless you set a minimum below) — stacks on top of any other active earning
+        A fixed amount, whatever the order is worth (unless you set a smallest order below). Stacks on top of any other active earning
         rules. An order number with no step and no "keep going" step before it gets no bonus.
       </s-text>
       {steps.map((s, i) => (
@@ -417,9 +417,139 @@ function MilestoneEditor({ steps, onChange, currency }) {
   );
 }
 
+// ---- layout pieces (Flits-style: description + action on the left, a card of rows on the right) ----
+
+const ICON_PATHS = {
+  cart: <><path d="M3 4h2.2l1.6 8.2a1 1 0 0 0 1 .8h7.3a1 1 0 0 0 1-.7L17 7H6" /><circle cx="8.5" cy="16.5" r="1.2" /><circle cx="14.5" cy="16.5" r="1.2" /></>,
+  tag: <><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5l7 7-7.5 7.5-7-7z" /><circle cx="7" cy="7" r="1.2" /></>,
+  steps: <path d="M3 16h4v-4h4V8h4V4h2" />,
+  user: <><circle cx="10" cy="7" r="3" /><path d="M4 17c0-3.2 2.7-5 6-5s6 1.8 6 5" /></>,
+  star: <path d="M10 2.8l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L2.8 8.1l5-.7z" />,
+  gift: <><rect x="3" y="8" width="14" height="9" rx="1" /><path d="M2.5 5.5h15V8h-15zM10 5.5V17" /><path d="M10 5.5C8 5.5 6.5 4 7.5 3S10 4 10 5.5zM10 5.5c2 0 3.5-1.5 2.5-2.5S10 4 10 5.5z" /></>,
+  percent: <><path d="M15.5 4.5l-11 11" /><circle cx="6" cy="6" r="1.8" /><circle cx="14" cy="14" r="1.8" /></>,
+  truck: <><path d="M2 5h9v8H2zM11 8h4l3 3v2h-7z" /><circle cx="6" cy="15" r="1.4" /><circle cx="14.5" cy="15" r="1.4" /></>,
+  coin: <><circle cx="10" cy="10" r="7" /><path d="M10 6v8M7.5 8.5H11a1.5 1.5 0 0 1 0 3H7.5" /></>,
+};
+const RULE_ICON = { PURCHASE_PER_CURRENCY: "cart", PURCHASE_FIXED: "tag", ORDER_MILESTONE: "steps", SIGNUP: "user", REVIEW: "star", REFERRAL_FRIEND: "gift", REFERRAL_REFERRER: "gift" };
+const REWARD_ICON = { CUSTOM_AMOUNT: "coin", FIXED_AMOUNT: "tag", PERCENTAGE: "percent", FREE_SHIPPING: "truck" };
+
+function Glyph({ kind }) {
+  return (
+    <span style={{ flex: "none", width: 36, height: 36, borderRadius: 8, border: "1px solid #e4e6ea", background: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {ICON_PATHS[kind] || ICON_PATHS.tag}
+      </svg>
+    </span>
+  );
+}
+
+const TEXT_BUTTON = { border: 0, background: "none", cursor: "pointer", padding: "4px 2px", fontSize: 13, fontWeight: 600, color: "#111827", textDecoration: "underline", textUnderlineOffset: 3 };
+
+// Left: what this is and the main action. Right: the card. Stacks on narrow screens.
+function SectionRow({ title, text, action, children }) {
+  return (
+    <div className="rules-row" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16, padding: "24px 0", borderTop: "1px solid #e4e6ea" }}>
+      <div>
+        <div style={{ fontSize: 15, fontWeight: 650, color: "#111827" }}>{title}</div>
+        <p style={{ margin: "6px 0 14px", fontSize: 13, color: "#6b7280", lineHeight: 1.55 }}>{text}</p>
+        {action}
+      </div>
+      <div style={{ minWidth: 0 }}>{children}</div>
+    </div>
+  );
+}
+
+function Card({ title, note, children }) {
+  return (
+    <div style={{ border: "1px solid #e4e6ea", borderRadius: 12, background: "#fff", overflow: "hidden" }}>
+      {title && <div style={{ padding: "12px 16px", fontSize: 14, fontWeight: 650, color: "#111827" }}>{title}</div>}
+      {children}
+      {note && <div style={{ padding: "10px 16px", borderTop: "1px solid #eceef1", background: "#fafafa", fontSize: 12.5, color: "#6b7280", lineHeight: 1.5 }}>{note}</div>}
+    </div>
+  );
+}
+
+function EmptyRow({ children }) {
+  return <div style={{ padding: "18px 16px", borderTop: "1px solid #eceef1", fontSize: 13, color: "#6b7280" }}>{children}</div>;
+}
+
+// One line in a card: icon, name + plain-language summary, status, Edit. The editor opens beneath.
+function ListRow({ icon, title, summary, active, open, onToggle, children }) {
+  return (
+    <div style={{ borderTop: "1px solid #eceef1" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+        <Glyph kind={icon} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{title}</div>
+          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{summary}</div>
+        </div>
+        <s-badge tone={active ? "success" : "neutral"}>{active ? "Active" : "Inactive"}</s-badge>
+        <button type="button" onClick={onToggle} style={TEXT_BUTTON}>{open ? "Close" : "Edit"}</button>
+      </div>
+      {open && <div style={{ padding: "6px 16px 16px", background: "#fafafa", borderTop: "1px solid #eceef1" }}>{children}</div>}
+    </div>
+  );
+}
+
+// "Add ..." picker. Lists only what this app can actually do, grouped, with a one-line explanation each.
+function PickerModal({ open, title, intro, groups, taken, busy, onPick, onClose }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(17,24,39,.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "6vh 16px 16px", overflowY: "auto" }}
+    >
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(580px, 100%)", background: "#fff", borderRadius: 14, boxShadow: "0 20px 50px rgba(0,0,0,.25)", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #e4e6ea" }}>
+          <div style={{ fontSize: 16, fontWeight: 650, color: "#111827" }}>{title}</div>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ border: 0, background: "none", cursor: "pointer", fontSize: 22, lineHeight: 1, color: "#6b7280", padding: 4 }}>×</button>
+        </div>
+        {intro && <div style={{ padding: "12px 20px 0", fontSize: 13, color: "#6b7280", lineHeight: 1.5 }}>{intro}</div>}
+        <div style={{ maxHeight: "68vh", overflowY: "auto", padding: "4px 0 8px" }}>
+          {groups.map((g) => (
+            <div key={g.title}>
+              <div style={{ padding: "14px 20px 6px", fontSize: 12, fontWeight: 650, color: "#6b7280", textTransform: "uppercase", letterSpacing: ".04em" }}>{g.title}</div>
+              {g.items.map((it) => {
+                const done = taken(it);
+                return (
+                  <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", borderTop: "1px solid #f1f2f4" }}>
+                    <Glyph kind={it.icon} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{it.title}</div>
+                      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{it.text}</div>
+                    </div>
+                    <s-button disabled={done || busy || undefined} onClick={() => onPick(it)}>
+                      {done ? "Added" : "Add"}
+                    </s-button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "12px 20px", borderTop: "1px solid #e4e6ea", display: "flex", justifyContent: "flex-end" }}>
+          <s-button onClick={onClose}>Cancel</s-button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- row editors ---------------------------------------------------------------------------------
+
 function RuleRow({ rule, currency, money }) {
   const fetcher = useFetcher();
   const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(rule.active);
   const [milestones, setMilestones] = useState(() =>
     rule.milestones?.length ? rule.milestones : [{ order: 1, points: 0, minOrderAmount: 0, continuing: false }]
   );
@@ -427,6 +557,7 @@ function RuleRow({ rule, currency, money }) {
   useEffect(() => {
     if (fetcher.state === "idle" && (fetcher.data?.ok === "Saved" || fetcher.data?.ok === "Removed")) setOpen(false);
   }, [fetcher.state, fetcher.data]);
+  useEffect(() => setActive(rule.active), [rule.active]);
 
   const isMilestone = rule.type === "ORDER_MILESTONE";
   const isPerCurrency = rule.type === "PURCHASE_PER_CURRENCY";
@@ -440,72 +571,49 @@ function RuleRow({ rule, currency, money }) {
   const hasMin = !["SIGNUP", "REVIEW", "ORDER_MILESTONE"].includes(rule.type);
 
   return (
-    <s-box padding="base" border="base" borderRadius="base">
-      <s-stack gap="base">
-        <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-          <s-stack gap="small-300">
-            <s-stack direction="inline" gap="small" alignItems="center">
-              <s-text type="strong">{rule.name}</s-text>
-              <s-badge tone={rule.active ? "success" : "neutral"}>{rule.active ? "Active" : "Off"}</s-badge>
-            </s-stack>
-            <s-text color="subdued">{ruleSummary(rule, money)}</s-text>
-          </s-stack>
-          <s-stack direction="inline" gap="small" alignItems="center">
-            <s-checkbox
-              label="Active"
-              checked={rule.active}
-              onChange={(e) => fetcher.submit({ intent: "rule-toggle", id: rule.id, active: String(e.currentTarget.checked) }, { method: "post" })}
-            />
-            <s-button variant="tertiary" onClick={() => setOpen((v) => !v)}>
-              {open ? "Close" : "Edit"}
+    <ListRow icon={RULE_ICON[rule.type]} title={rule.name} summary={ruleSummary(rule, money)} active={rule.active} open={open} onToggle={() => setOpen((v) => !v)}>
+      <fetcher.Form method="post">
+        <input type="hidden" name="intent" value="rule-save" />
+        <input type="hidden" name="id" value={rule.id} />
+        <input type="hidden" name="type" value={rule.type} />
+        <input type="hidden" name="active" value={active ? "on" : "off"} />
+        <s-stack gap="base">
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
+            <s-text-field label="Name (shown to customers)" name="name" value={rule.name} />
+            {!isMilestone && <s-number-field label={valueLabel} name="value" min="1" step="1" value={String(rule.value)} />}
+            {isPerCurrency && (
+              <s-number-field
+                label="Most points per order"
+                name="maxPoints"
+                min="0"
+                step="1"
+                value={String(rule.maxPoints || 0)}
+                details="0 = no limit. Example: 1 point per ₹10, up to 100 points."
+              />
+            )}
+            {hasMin && (
+              <s-number-field
+                label={`Smallest order that counts (${currency})`}
+                name="minOrderAmount"
+                min="0"
+                value={String(rule.minOrderAmount)}
+                details="0 = every order counts."
+              />
+            )}
+          </s-grid>
+          {isMilestone && <MilestoneEditor steps={milestones} onChange={setMilestones} currency={currency} />}
+          <s-checkbox label="This rule is on" checked={active} onChange={(e) => setActive(e.currentTarget.checked)} />
+          <s-stack direction="inline" justifyContent="space-between">
+            <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this rule? Points already earned are not affected.") && fetcher.submit({ intent: "rule-delete", id: rule.id }, { method: "post" })}>
+              Remove
+            </s-button>
+            <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
+              Save
             </s-button>
           </s-stack>
         </s-stack>
-
-        {open && (
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="rule-save" />
-            <input type="hidden" name="id" value={rule.id} />
-            <input type="hidden" name="type" value={rule.type} />
-            <input type="hidden" name="active" value={rule.active ? "on" : "off"} />
-            <s-stack gap="base">
-              <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
-                <s-text-field label="Name (shown to customers)" name="name" value={rule.name} />
-                {!isMilestone && <s-number-field label={valueLabel} name="value" min="1" step="1" value={String(rule.value)} />}
-                {isPerCurrency && (
-                  <s-number-field
-                    label="Cap points per order"
-                    name="maxPoints"
-                    min="0"
-                    step="1"
-                    value={String(rule.maxPoints || 0)}
-                    details="0 = no cap, e.g. 1 point per ₹10 up to 100 points"
-                  />
-                )}
-                {hasMin && (
-                  <s-number-field
-                    label={`Minimum order (${currency})`}
-                    name="minOrderAmount"
-                    min="0"
-                    value={String(rule.minOrderAmount)}
-                    details="0 = any order"
-                  />
-                )}
-              </s-grid>
-              {isMilestone && <MilestoneEditor steps={milestones} onChange={setMilestones} currency={currency} />}
-              <s-stack direction="inline" justifyContent="space-between">
-                <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this rule?") && fetcher.submit({ intent: "rule-delete", id: rule.id }, { method: "post" })}>
-                  Remove
-                </s-button>
-                <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
-                  Save
-                </s-button>
-              </s-stack>
-            </s-stack>
-          </fetcher.Form>
-        )}
-      </s-stack>
-    </s-box>
+      </fetcher.Form>
+    </ListRow>
   );
 }
 
@@ -513,117 +621,76 @@ function RewardRow({ reward, currency, money }) {
   const fetcher = useFetcher();
   const [open, setOpen] = useState(false);
   const [type, setType] = useState(reward.type);
+  const [active, setActive] = useState(reward.active);
   useToast(fetcher);
   useEffect(() => {
     if (fetcher.state === "idle" && (fetcher.data?.ok === "Saved" || fetcher.data?.ok === "Removed")) setOpen(false);
   }, [fetcher.state, fetcher.data]);
+  useEffect(() => setActive(reward.active), [reward.active]);
   const custom = type === "CUSTOM_AMOUNT";
 
   return (
-    <s-box padding="base" border="base" borderRadius="base">
-      <s-stack gap="base">
-        <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-          <s-stack gap="small-300">
-            <s-stack direction="inline" gap="small" alignItems="center">
-              <s-text type="strong">{reward.name}</s-text>
-              <s-badge tone={reward.active ? "success" : "neutral"}>{reward.active ? "Active" : "Off"}</s-badge>
-            </s-stack>
-            <s-text color="subdued">
-              {rewardSummary(reward, money)} · {reward.redemptions} redeemed
-            </s-text>
-          </s-stack>
-          <s-stack direction="inline" gap="small" alignItems="center">
-            <s-checkbox
-              label="Active"
-              checked={reward.active}
-              onChange={(e) => fetcher.submit({ intent: "reward-toggle", id: reward.id, active: String(e.currentTarget.checked) }, { method: "post" })}
+    <ListRow
+      icon={REWARD_ICON[reward.type]}
+      title={reward.name}
+      summary={`${rewardSummary(reward, money)} · ${reward.redemptions} redeemed`}
+      active={reward.active}
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+    >
+      <fetcher.Form method="post">
+        <input type="hidden" name="intent" value="reward-save" />
+        <input type="hidden" name="id" value={reward.id} />
+        <input type="hidden" name="active" value={active ? "on" : "off"} />
+        <s-stack gap="base">
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
+            <s-text-field label="Name (shown to customers)" name="name" value={reward.name} />
+            <s-select label="Type" name="type" value={type} onChange={(e) => setType(e.currentTarget.value)}>
+              {Object.entries(REWARD_TYPES).map(([k, v]) => (
+                <s-option key={k} value={k}>{v}</s-option>
+              ))}
+            </s-select>
+            {type !== "FREE_SHIPPING" && (
+              <s-number-field
+                label={custom ? `Worth (${currency}) per step` : type === "PERCENTAGE" ? "Percent off" : `Amount off (${currency})`}
+                name="value"
+                min="0"
+                step="any"
+                value={String(reward.value)}
+              />
+            )}
+            <s-number-field
+              label={custom ? "Points per step" : "Points it costs"}
+              name="pointsCost"
+              min="1"
+              step="1"
+              value={String(reward.pointsCost)}
+              details={custom ? "Example: 100 points = the amount on the left." : undefined}
             />
-            <s-button variant="tertiary" onClick={() => setOpen((v) => !v)}>
-              {open ? "Close" : "Edit"}
+            {custom && (
+              <>
+                <s-number-field label="Fewest points to spend" name="minPoints" min="0" step="1" value={String(reward.minPoints)} />
+                <s-number-field label="Most points to spend" name="maxPoints" min="0" step="1" value={String(reward.maxPoints)} details="0 = no limit." />
+              </>
+            )}
+            <s-number-field label={`Smallest order (${currency})`} name="minOrderAmount" min="0" value={String(reward.minOrderAmount)} details="0 = any order." />
+            <s-number-field label="Code works for (days)" name="codeValidDays" min="0" step="1" value={String(reward.codeValidDays)} details="0 = never runs out." />
+          </s-grid>
+          <s-checkbox label="This reward is on" checked={active} onChange={(e) => setActive(e.currentTarget.checked)} />
+          <s-stack direction="inline" justifyContent="space-between">
+            <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this reward? Past redemptions stay in the history.") && fetcher.submit({ intent: "reward-delete", id: reward.id }, { method: "post" })}>
+              Remove
+            </s-button>
+            <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
+              Save
             </s-button>
           </s-stack>
         </s-stack>
-
-        {open && (
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="reward-save" />
-            <input type="hidden" name="id" value={reward.id} />
-            <input type="hidden" name="active" value={reward.active ? "on" : "off"} />
-            <s-stack gap="base">
-              <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
-                <s-text-field label="Name (shown to customers)" name="name" value={reward.name} />
-                <s-select label="Type" name="type" value={type} onChange={(e) => setType(e.currentTarget.value)}>
-                  {Object.entries(REWARD_TYPES).map(([k, v]) => (
-                    <s-option key={k} value={k}>{v}</s-option>
-                  ))}
-                </s-select>
-                {type !== "FREE_SHIPPING" && (
-                  <s-number-field
-                    label={custom ? `Worth (${currency}) per step` : type === "PERCENTAGE" ? "Percent off" : `Amount off (${currency})`}
-                    name="value"
-                    min="0"
-                    step="any"
-                    value={String(reward.value)}
-                  />
-                )}
-                <s-number-field
-                  label={custom ? "Points per step" : "Points cost"}
-                  name="pointsCost"
-                  min="1"
-                  step="1"
-                  value={String(reward.pointsCost)}
-                  details={custom ? "e.g. 100 points = the amount on the left" : undefined}
-                />
-                {custom && (
-                  <>
-                    <s-number-field label="Minimum points to use" name="minPoints" min="0" step="1" value={String(reward.minPoints)} />
-                    <s-number-field label="Maximum points per redemption" name="maxPoints" min="0" step="1" value={String(reward.maxPoints)} details="0 = no cap" />
-                  </>
-                )}
-                <s-number-field label={`Minimum order (${currency})`} name="minOrderAmount" min="0" value={String(reward.minOrderAmount)} details="0 = any order" />
-                <s-number-field label="Code valid for (days)" name="codeValidDays" min="0" step="1" value={String(reward.codeValidDays)} details="0 = never expires" />
-              </s-grid>
-              <s-stack direction="inline" justifyContent="space-between">
-                <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this reward? Past redemptions stay in the history.") && fetcher.submit({ intent: "reward-delete", id: reward.id }, { method: "post" })}>
-                  Remove
-                </s-button>
-                <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
-                  Save
-                </s-button>
-              </s-stack>
-            </s-stack>
-          </fetcher.Form>
-        )}
-      </s-stack>
-    </s-box>
+      </fetcher.Form>
+    </ListRow>
   );
 }
 
-function PresetGallery({ items, existing, singleton, onAdd, busy }) {
-  return (
-    <s-grid gridTemplateColumns="repeat(auto-fit, minmax(230px, 1fr))" gap="base">
-      {items.map((p) => {
-        const has = singleton && singleton(p, existing);
-        return (
-          <s-box key={p.key} padding="base" border="base" borderRadius="base" background="subdued">
-            {/* flex column + a flexed spacer keeps every card's "Add" button on the same line,
-                regardless of how many lines its title/description take. */}
-            <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
-              <s-text type="strong">{p.title}</s-text>
-              <s-text color="subdued">{p.text}</s-text>
-              <div style={{ flex: 1 }} />
-              <s-stack direction="inline">
-                <s-button disabled={has || busy || undefined} onClick={() => onAdd(p)}>
-                  {has ? "Already added" : "Add"}
-                </s-button>
-              </s-stack>
-            </div>
-          </s-box>
-        );
-      })}
-    </s-grid>
-  );
-}
 
 // Which reward codes a customer may hold at the same time. Ticked = can be used together.
 function StackGrid({ rewards }) {
@@ -744,7 +811,7 @@ Our own lookup/redeem (kept for custom-checkout widgets that use a Shopify disco
         Fast-checkout apps like Shiprocket Checkout (fastrr) replace the Shopify checkout page, so the widget and a pasted code can&apos;t run there.
         Their own API spec ("Loyalty Points Manager") calls us by mobile number as their checkout runs: it fetches the balance, blocks the points the
         shopper chose to use against their own order id, and tells us by webhook whether that order succeeded. Turn this on, then send the details
-        below to Shiprocket&apos;s checkout support — they enable it on their side.
+        below to Shiprocket&apos;s checkout support, who enable it on their side.
       </s-paragraph>
       {fc.enabled && !fc.hasLoyaltyReward && (
         <s-banner tone="warning">
@@ -844,112 +911,185 @@ function JudgeMe({ jm, reviewRuleActive }) {
 
 // ---- the page --------------------------------------------------------------------------------------
 
+const EARN_GROUPS = [
+  { title: "Purchases", keys: ["spend", "fixed", "big", "milestone"] },
+  { title: "Customer actions", keys: ["welcome", "review"] },
+  { title: "Referrals", keys: ["ref-friend", "ref-owner"] },
+];
+const EARN_ICON = { spend: "cart", fixed: "tag", big: "tag", milestone: "steps", welcome: "user", review: "star", "ref-friend": "gift", "ref-owner": "gift" };
+const REDEEM_ICON = { any: "coin", fixed: "tag", percent: "percent", ship: "truck" };
+
 export default function Rules() {
   const { settings, rules, rewards, currency, judgeme, fastCheckout } = useLoaderData();
   const money = useMoney(currency);
   const settingsFetcher = useFetcher();
   const adder = useFetcher();
+  const [picker, setPicker] = useState(null); // "earn" | "spend" | null
   useToast(settingsFetcher);
   useToast(adder);
   const p = presets(currency);
+  const busy = adder.state !== "idle";
 
-  const addRule = (preset) => adder.submit({ intent: "rule-save", ...toForm({ ...preset.rule, active: true }) }, { method: "post" });
-  const addReward = (preset) => adder.submit({ intent: "reward-save", ...toForm({ ...preset.reward, active: true }) }, { method: "post" });
+  const addRule = (preset) => {
+    adder.submit({ intent: "rule-save", ...toForm({ ...preset.rule, active: true }) }, { method: "post" });
+    setPicker(null);
+  };
+  const addReward = (preset) => {
+    adder.submit({ intent: "reward-save", ...toForm({ ...preset.reward, active: true }) }, { method: "post" });
+    setPicker(null);
+  };
   const reviewRule = rules.find((r) => r.type === "REVIEW");
+
+  const earnGroups = EARN_GROUPS.map((g) => ({
+    title: g.title,
+    items: g.keys.map((k) => ({ ...p.earn.find((e) => e.key === k), icon: EARN_ICON[k] })),
+  }));
+  const spendGroups = [{ title: "Rewards customers can claim", items: p.redeem.map((x) => ({ ...x, icon: REDEEM_ICON[x.key] })) }];
+  const earnTaken = (it) => SINGLETON.includes(it.rule.type) && rules.some((r) => r.type === it.rule.type);
 
   return (
     <s-page heading="Rules">
-      <s-section heading="When points are credited">
-        <settingsFetcher.Form method="post">
-          <input type="hidden" name="intent" value="settings" />
-          <s-stack gap="base">
-            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap="base">
-              <s-select label="Credit points when" name="earnTrigger" value={settings.earnTrigger}>
-                {Object.entries(TRIGGERS).map(([k, v]) => (
-                  <s-option key={k} value={k}>{v}</s-option>
-                ))}
-              </s-select>
-              <s-number-field label="Wait after that (days)" name="holdDays" min="0" step="1" value={String(settings.holdDays)} details="Your return window. 0 = credit straight away" />
-              <s-number-field label="Points expire after (days)" name="expiryDays" min="0" step="1" value={String(settings.expiryDays)} details="0 = never expire. Customers get a reminder email first" />
-              <s-number-field label="Minimum balance to redeem" name="minRedeemPoints" min="0" step="1" value={String(settings.minRedeemPoints)} />
-              <s-select
-                label="Reward codes in one order"
-                name="codeStacking"
-                value={settings.allowStackedCodes ? "many" : "one"}
-                details="Applies to codes made from now on. Codes already issued keep the setting they were made with."
-              >
-                <s-option value="one">One code at a time (recommended)</s-option>
-                <s-option value="many">Allow several codes together</s-option>
-              </s-select>
-            </s-grid>
-            <s-stack direction="inline" justifyContent="end">
-              <s-button type="submit" variant="primary" loading={settingsFetcher.state !== "idle" || undefined}>Save</s-button>
-            </s-stack>
-          </s-stack>
-        </settingsFetcher.Form>
-        <s-box paddingBlockStart="base">
-          <s-banner tone="info">
-            Delivery and returns come straight from Shopify. While a return is open, waiting points are held. If the return
-            completes, the order's points are cancelled (or taken back if already credited) and never credited. If it's declined or
-            cancelled, crediting carries on. Refunds reduce points in proportion.
-          </s-banner>
-        </s-box>
-      </s-section>
+      <style>{"@media (min-width:900px){.rules-row{grid-template-columns:minmax(220px,1fr) minmax(0,2fr) !important}}"}</style>
 
-      <s-section heading="Ways to earn">
-        <s-stack gap="base">
-          {rules.length === 0 && <s-paragraph>No earning rules yet. Add one from the ready-made options below.</s-paragraph>}
-          {rules.map((r) => (
-            <RuleRow key={r.id} rule={r} currency={currency} money={money} />
-          ))}
-          <s-heading>Add a way to earn</s-heading>
-          <PresetGallery
-            items={p.earn}
-            existing={rules}
-            singleton={(preset, existing) => SINGLETON.includes(preset.rule.type) && existing.some((r) => r.type === preset.rule.type)}
-            onAdd={addRule}
-            busy={adder.state !== "idle"}
-          />
-        </s-stack>
-      </s-section>
+      <div style={{ paddingBottom: 24 }}>
+        <p style={{ margin: "0 0 16px", fontSize: 14, color: "#374151", lineHeight: 1.55, maxWidth: 720 }}>
+          Rules decide how customers <b>earn</b> points and what they can <b>spend</b> them on. Turn on the ones you need and the rest runs
+          automatically. Changes only affect future orders, never points a customer already has.
+        </p>
 
-      <s-section heading="Ways to spend points">
-        <s-stack gap="base">
-          {rewards.length === 0 && <s-paragraph>No rewards yet. Add one below so customers have something to redeem.</s-paragraph>}
-          {rewards.map((r) => (
-            <RewardRow key={r.id} reward={r} currency={currency} money={money} />
-          ))}
-          <s-paragraph>
-            Redeeming creates a single-use Shopify discount code for that customer. They copy it and paste it at checkout, and Shopify takes
-            the amount off before payment, whatever payment method they use.
-          </s-paragraph>
-          <s-heading>Add a way to spend</s-heading>
-          <PresetGallery items={p.redeem} existing={rewards} onAdd={addReward} busy={adder.state !== "idle"} />
-        </s-stack>
-      </s-section>
+        <SectionRow
+          title="Ways to earn points"
+          text="Pick what earns points: spending, order count, joining, reviews or referrals. Customers see these in your rewards widget."
+          action={<s-button variant="primary" onClick={() => setPicker("earn")}>Add a way to earn</s-button>}
+        >
+          <Card title="Earning rules" note="Every rule that is on applies together. One order can earn from several rules at once, for example points per amount spent plus a bonus for the customer's first order.">
+            {rules.length === 0 ? (
+              <EmptyRow>No earning rules yet. Click “Add a way to earn” to create your first one.</EmptyRow>
+            ) : (
+              rules.map((r) => <RuleRow key={r.id} rule={r} currency={currency} money={money} />)
+            )}
+          </Card>
+        </SectionRow>
 
-      <s-section heading="Using several reward codes together">
-        {settings.allowStackedCodes ? (
-          rewards.length ? (
-            <StackGrid key={rewards.map((r) => `${r.id}:${r.noStackWith.join(",")}`).join(";")} rewards={rewards} />
-          ) : (
-            <s-paragraph>Add a reward above, then choose which ones can be combined.</s-paragraph>
-          )
-        ) : (
-          <s-paragraph>
-            Right now customers use one reward code at a time. Set <s-text type="strong">Reward codes in one order</s-text> to “Allow several
-            codes together” (at the top of this page) and save, and you&apos;ll choose here exactly which rewards can be used together.
-          </s-paragraph>
-        )}
-      </s-section>
+        <SectionRow
+          title="Ways to spend points"
+          text="Pick what customers can get for their points. When they redeem, we create a one-time Shopify discount code just for them. They paste it at checkout and Shopify takes the amount off."
+          action={<s-button variant="primary" onClick={() => setPicker("spend")}>Add a way to spend</s-button>}
+        >
+          <Card title="Rewards" note="A reward is a single-use discount code. It is not store credit or a gift card.">
+            {rewards.length === 0 ? (
+              <EmptyRow>No rewards yet. Customers can't redeem anything until you add one.</EmptyRow>
+            ) : (
+              rewards.map((r) => <RewardRow key={r.id} reward={r} currency={currency} money={money} />)
+            )}
+          </Card>
+        </SectionRow>
 
-      <s-section heading="Fast checkout (Shiprocket)">
-        <FastCheckout fc={fastCheckout} />
-      </s-section>
+        <SectionRow
+          title="Combining reward codes"
+          text="Decide whether a customer can hold or use more than one reward code at a time. By default it is one at a time, which is the simplest."
+        >
+          <Card>
+            <div style={{ padding: 16 }}>
+              {settings.allowStackedCodes ? (
+                rewards.length ? (
+                  <StackGrid key={rewards.map((r) => `${r.id}:${r.noStackWith.join(",")}`).join(";")} rewards={rewards} />
+                ) : (
+                  <s-paragraph>Add a reward first, then choose which ones can be combined.</s-paragraph>
+                )
+              ) : (
+                <s-paragraph>
+                  Customers use one reward code at a time right now. To allow several, change <s-text type="strong">Reward codes in one order</s-text>{" "}
+                  under “When points are credited” at the bottom of this page, then choose exactly which rewards can be combined here.
+                </s-paragraph>
+              )}
+            </div>
+          </Card>
+        </SectionRow>
 
-      <s-section heading="Review points (Judge.me)">
-        <JudgeMe jm={judgeme} reviewRuleActive={!!reviewRule?.active} />
-      </s-section>
+        <SectionRow
+          title="Product review points"
+          text="Optional. Give points when customers leave a good review on Judge.me. Skip this if you don't use Judge.me."
+        >
+          <Card>
+            <div style={{ padding: 16 }}>
+              <JudgeMe jm={judgeme} reviewRuleActive={!!reviewRule?.active} />
+            </div>
+          </Card>
+        </SectionRow>
+
+        <SectionRow
+          title="Shiprocket fast checkout"
+          text="Optional. Only needed if you use Shiprocket Checkout instead of Shopify's own checkout, so customers can still spend points there."
+        >
+          <Card>
+            <div style={{ padding: 16 }}>
+              <FastCheckout fc={fastCheckout} />
+            </div>
+          </Card>
+        </SectionRow>
+
+        <SectionRow
+          title="When points are credited"
+          text="Choose when points reach a customer's balance, how long they last, and the smallest balance needed before they can redeem."
+        >
+          <Card>
+            <settingsFetcher.Form method="post">
+              <input type="hidden" name="intent" value="settings" />
+              <div style={{ padding: 16 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 16, alignItems: "start" }}>
+                  <s-select label="Credit points when" name="earnTrigger" value={settings.earnTrigger} details="Which order status releases the points.">
+                    {Object.entries(TRIGGERS).map(([k, v]) => (
+                      <s-option key={k} value={k}>{v}</s-option>
+                    ))}
+                  </s-select>
+                  <s-number-field label="Wait after that (days)" name="holdDays" min="0" step="1" value={String(settings.holdDays)} details="Your return window. 0 = straight away." />
+                  <s-number-field label="Points expire after (days)" name="expiryDays" min="0" step="1" value={String(settings.expiryDays)} details="0 = never expire." />
+                  <s-number-field label="Smallest balance to redeem" name="minRedeemPoints" min="0" step="1" value={String(settings.minRedeemPoints)} details="Points needed before spending." />
+                  <s-select
+                    label="Reward codes in one order"
+                    name="codeStacking"
+                    value={settings.allowStackedCodes ? "many" : "one"}
+                    details="Applies to new codes only."
+                  >
+                    <s-option value="one">One at a time (simplest)</s-option>
+                    <s-option value="many">Allow several together</s-option>
+                  </s-select>
+                </div>
+                <p style={{ margin: "16px 0 0", fontSize: 12.5, color: "#6b7280", lineHeight: 1.55 }}>
+                  <b>Returns and refunds:</b> while a return is open, points are held back. If the return completes, that order's points are cancelled
+                  (or taken back if already credited). If it is declined or cancelled, points carry on as normal. A refund reduces points in proportion.
+                  Delivery and return status come straight from Shopify.
+                </p>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", padding: "10px 16px", borderTop: "1px solid #eceef1", background: "#fafafa" }}>
+                <s-button type="submit" variant="primary" loading={settingsFetcher.state !== "idle" || undefined}>Save</s-button>
+              </div>
+            </settingsFetcher.Form>
+          </Card>
+        </SectionRow>
+      </div>
+
+      <PickerModal
+        open={picker === "earn"}
+        title="Add a way to earn"
+        intro="Customers earn from every rule that is on. You can change the numbers after adding."
+        groups={earnGroups}
+        taken={earnTaken}
+        busy={busy}
+        onPick={addRule}
+        onClose={() => setPicker(null)}
+      />
+      <PickerModal
+        open={picker === "spend"}
+        title="Add a way to spend"
+        intro="Each reward becomes a single-use Shopify discount code. You can change the numbers after adding."
+        groups={spendGroups}
+        taken={() => false}
+        busy={busy}
+        onPick={addReward}
+        onClose={() => setPicker(null)}
+      />
     </s-page>
   );
 }

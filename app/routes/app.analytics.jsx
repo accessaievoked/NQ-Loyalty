@@ -53,6 +53,11 @@ export default function Analytics() {
   return (
     <s-page heading="Loyalty analytics">
       <s-section>
+        <s-text color="subdued">
+          How your loyalty program is performing: new members, points earned and spent, and the revenue from members. Pick a period below. Numbers update as orders come in.
+        </s-text>
+      </s-section>
+      <s-section>
         <s-stack direction="inline" gap="base" alignItems="end" justifyContent="space-between">
           <s-stack direction="inline" gap="base" alignItems="end">
             <s-select label="Period" name="range" value={choice} onChange={(e) => pick(e.currentTarget.value)}>

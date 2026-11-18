@@ -24,25 +24,34 @@ export const action = async ({ request }) => {
   return { ok: displayMode === "PAGE" ? "Rewards page selected" : "Floating widget selected" };
 };
 
-// The grid stretches every card to the tallest one's height, but a shorter card's own content
-// (title/text/link) doesn't — so its button floats above the bottom instead of lining up with the
-// other card's. A flex column pins the button to the bottom regardless of how much text precedes it.
-function ModeCard({ value, title, text, current, onPick, children }) {
+// Each card is a 4-row subgrid (title, description, link, button), so side by side the rows line up:
+// the title, the description (as tall as the longer one), the link and the button all sit on the same
+// line in both cards, whatever the text length.
+const LINK_STYLE = { color: "#111827", textDecoration: "underline", textUnderlineOffset: 3, fontSize: 14 };
+
+function ModeCard({ value, title, text, current, onPick, linkHref, linkText }) {
   const active = current === value;
   return (
-    <s-box padding="base" border={active ? "large" : "base"} borderRadius="large" background={active ? "subdued" : "base"}>
-      <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
-        <s-stack direction="inline" justifyContent="space-between" alignItems="center">
-          <s-heading>{title}</s-heading>
-          {active && <s-badge tone="success">In use</s-badge>}
-        </s-stack>
-        <s-paragraph>{text}</s-paragraph>
-        <div style={{ flex: 1 }}>{children}</div>
+    <div
+      style={{
+        gridRow: "span 4", display: "grid", gridTemplateRows: "subgrid", rowGap: 12, padding: 16, borderRadius: 12,
+        border: active ? "2px solid #111827" : "1px solid #e4e6ea", background: active ? "#f7f7f8" : "#fff",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 650, color: "#111827" }}>{title}</div>
+        {active && <s-badge tone="success">In use</s-badge>}
+      </div>
+      <div style={{ fontSize: 14, color: "#374151", lineHeight: 1.5 }}>{text}</div>
+      <div>
+        <a href={linkHref} target="_blank" rel="noreferrer" style={LINK_STYLE}>{linkText}</a>
+      </div>
+      <div>
         <s-button variant={active ? "secondary" : "primary"} disabled={active || undefined} onClick={() => onPick(value)}>
           {active ? "Selected" : `Use ${title.toLowerCase()}`}
         </s-button>
       </div>
-    </s-box>
+    </div>
   );
 }
 
@@ -66,30 +75,29 @@ export default function Appearance() {
       </s-button>
 
       <s-section heading="How should customers see your program?">
-        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(280px, 1fr))" gap="base">
+        <s-paragraph>
+          Choose where customers find their points and rewards. You can switch at any time. Nothing is deleted when you switch.
+        </s-paragraph>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", columnGap: 16, rowGap: 12, marginTop: 12 }}>
           <ModeCard
             value="WIDGET"
             title="Floating widget"
-            text="A button on every page that opens a rewards overlay. Customers never leave what they're browsing."
+            text="A small button on every page that opens a rewards panel. Customers stay on the page they are browsing."
             current={current}
             onPick={pick}
-          >
-            <s-link href={embedUrl} target="_blank">
-              Turn on the app embed in your theme
-            </s-link>
-          </ModeCard>
+            linkHref={embedUrl}
+            linkText="Turn on the app embed in your theme"
+          />
           <ModeCard
             value="PAGE"
             title="Rewards page"
-            text="A full page inside your theme, at its own address. Link to it from your menu or footer."
+            text="A full page in your theme at its own address. Add a link to it in your menu or footer."
             current={current}
             onPick={pick}
-          >
-            <s-link href={`https://${shop}/apps/loyalty/rewards`} target="_blank">
-              /apps/loyalty/rewards
-            </s-link>
-          </ModeCard>
-        </s-grid>
+            linkHref={`https://${shop}/apps/loyalty/rewards`}
+            linkText="/apps/loyalty/rewards"
+          />
+        </div>
       </s-section>
 
       <s-section heading="Design it your way">

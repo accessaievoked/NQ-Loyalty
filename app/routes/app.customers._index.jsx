@@ -73,6 +73,9 @@ export default function Customers() {
       </s-button>
       <s-section>
         <s-stack gap="base">
+          <s-text color="subdued">
+            Everyone in your loyalty program. Click a name to see their orders, points history, referrals and reward codes, or to adjust their points.
+          </s-text>
           <Form method="get">
             <input type="hidden" name="sort" value={sort} />
             <s-stack direction="inline" gap="small" alignItems="end">
