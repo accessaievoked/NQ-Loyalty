@@ -1,16 +1,25 @@
-import { Form, Link, useLoaderData } from "react-router";
+import { Form, Link, useLoaderData, useNavigate } from "react-router";
 import { requireStore } from "../services/auth.server";
 import db from "../db.server";
 import { referralCounts } from "../services/referralstats.server";
 
 const PAGE = 10;
+
+const SORTS = {
+  points_desc: { label: "Most points earned", orderBy: [{ lifetimePoints: "desc" }, { createdAt: "desc" }] },
+  points_asc: { label: "Fewest points earned", orderBy: [{ lifetimePoints: "asc" }, { createdAt: "desc" }] },
+  balance_desc: { label: "Highest points balance", orderBy: [{ pointsBalance: "desc" }, { createdAt: "desc" }] },
+  newest: { label: "Newest members", orderBy: [{ createdAt: "desc" }] },
+  oldest: { label: "Oldest members", orderBy: [{ createdAt: "asc" }] },
+};
 const fmt = (n) => new Intl.NumberFormat("en-IN").format(n);
 
 export const loader = async ({ request }) => {
   const { store } = await requireStore(request);
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim();
-  const sort = url.searchParams.get("sort") === "asc" ? "asc" : "desc";
+  const asked = url.searchParams.get("sort");
+  const sort = SORTS[asked] ? asked : asked === "asc" ? "points_asc" : "points_desc";
   const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
 
   const where = {
@@ -29,7 +38,7 @@ export const loader = async ({ request }) => {
     db.customer.count({ where }),
     db.customer.findMany({
       where,
-      orderBy: [{ lifetimePoints: sort }, { createdAt: "desc" }],
+      orderBy: SORTS[sort].orderBy,
       skip: (page - 1) * PAGE,
       take: PAGE,
     }),
@@ -63,8 +72,9 @@ const DARK_LINK = { color: "#111827", textDecoration: "none" };
 
 export default function Customers() {
   const { rows, q, sort, page, pages, total } = useLoaderData();
-  const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), ...(sort === "asc" ? { sort } : {}), page: String(p) })}`;
-  const sortLink = `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), sort: sort === "asc" ? "desc" : "asc" })}`;
+  const navigate = useNavigate();
+  const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), ...(sort !== "points_desc" ? { sort } : {}), page: String(p) })}`;
+  const changeSort = (value) => navigate(`/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), sort: value })}`);
 
   return (
     <s-page heading="Customers">
@@ -83,11 +93,13 @@ export default function Customers() {
                 <s-search-field label="Search" labelAccessibilityVisibility="exclusive" name="q" value={q} placeholder="Search name or email" />
               </div>
               <s-button type="submit" icon="search" accessibilityLabel="Search" />
-              <s-button
-                icon="sort"
-                accessibilityLabel={sort === "asc" ? "Sorted lowest points first; click for highest first" : "Sorted highest points first; click for lowest first"}
-                href={sortLink}
-              />
+              <div style={{ width: 220, flex: "none" }}>
+                <s-select label="Sort by" labelAccessibilityVisibility="exclusive" value={sort} onChange={(e) => changeSort(e.currentTarget.value)}>
+                  {Object.entries(SORTS).map(([k, v]) => (
+                    <s-option key={k} value={k}>{v.label}</s-option>
+                  ))}
+                </s-select>
+              </div>
             </s-stack>
           </Form>
 

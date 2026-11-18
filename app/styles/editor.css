@@ -67,6 +67,8 @@
 .ed-note { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: #fff7e0; border: 1px solid #f0d98c; color: #5c4400; }
 /* email editor preview */
 .ed-stage-col { flex-direction: column; align-items: center; gap: 12px; }
+/* .ed-stage (declared later) sets align-items: stretch, which left the subject bar and email at the left edge; centre them */
+.ed-stage.ed-stage-col { align-items: center; }
 .ed-subject { width: 100%; max-width: 720px; display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; background: #fff; border: 1px solid var(--ed-line); border-radius: 10px; }
 .ed-subject span { color: var(--ed-muted); font-size: 12px; }
 .ed-subject strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
