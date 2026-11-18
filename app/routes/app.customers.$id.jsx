@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useFetcher, useLoaderData } from "react-router";
+import { Link, useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { requireStore } from "../services/auth.server";
 import { InsufficientPointsError, postTransaction } from "../services/ledger.server";
@@ -156,6 +156,7 @@ function CopyField({ label, value }) {
 }
 
 const ORDER_STATUS_TONE = { Paid: "success", Pending: "warning", Cancelled: "critical", Returned: "critical" };
+const DARK_LINK = { color: "#111827", textDecoration: "none" };
 
 export default function CustomerDetail() {
   const { customer, ledger, codes, referrals, stats, orders, currency } = useLoaderData();
@@ -283,7 +284,7 @@ export default function CustomerDetail() {
         <s-stack gap="base">
           {referrals.referredBy && (
             <s-text>
-              Referred by <s-link href={`/app/customers/${referrals.referredBy.id}`}>{referrals.referredBy.name}</s-link>{" "}
+              Referred by <Link to={`/app/customers/${referrals.referredBy.id}`} style={DARK_LINK}>{referrals.referredBy.name}</Link>{" "}
               <s-badge tone={statusTone[referrals.referredBy.status] ?? "neutral"}>{referrals.referredBy.status.toLowerCase()}</s-badge>
             </s-text>
           )}
@@ -321,7 +322,7 @@ export default function CustomerDetail() {
                 {referrals.friends.map((f) => (
                   <s-table-row key={f.id}>
                     <s-table-cell>
-                      <s-link href={`/app/customers/${f.id}`}>{f.name}</s-link>
+                      <Link to={`/app/customers/${f.id}`} style={DARK_LINK}>{f.name}</Link>
                     </s-table-cell>
                     <s-table-cell>
                       <s-badge tone={statusTone[f.status] ?? "neutral"}>{f.status.toLowerCase()}</s-badge>

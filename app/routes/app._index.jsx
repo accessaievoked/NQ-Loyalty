@@ -1,4 +1,4 @@
-import { useLoaderData } from "react-router";
+import { Link, useLoaderData } from "react-router";
 import { requireStore } from "../services/auth.server";
 import { loadAnalytics } from "../services/analytics.server";
 import { getFx } from "../services/currency.server";
@@ -56,6 +56,8 @@ const TYPE = {
   ADJUST: { label: "Adjusted", color: COLORS.blue },
 };
 
+const DARK_LINK = { color: "#111827", textDecoration: "none" };
+
 const when = (iso) => {
   const d = new Date(iso);
   return `${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]}, ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
@@ -102,25 +104,25 @@ export default function Home() {
           </summary>
           <div style={{ marginTop: 10 }}>
             <Step done={checklist.rules}>
-              Choose how customers earn points and when they&apos;re credited. <s-link href="/app/rules">Open rules</s-link>
+              Choose how customers earn points and when they&apos;re credited. <Link to="/app/rules" style={DARK_LINK}>Open rules</Link>
             </Step>
             <Step done={checklist.rewards}>
-              Add rewards customers can spend points on. <s-link href="/app/rules">Open rewards</s-link>
+              Add rewards customers can spend points on. <Link to="/app/rules" style={DARK_LINK}>Open rewards</Link>
             </Step>
             <Step done={false}>
               {mode === "WIDGET" ? (
                 <>
                   Turn on the app embed so the widget appears in your theme.{" "}
-                  <s-link href={embedUrl} target="_blank">
+                  <a href={embedUrl} target="_blank" rel="noreferrer" style={DARK_LINK}>
                     Open theme editor
-                  </s-link>
+                  </a>
                 </>
               ) : (
                 <>
                   Your rewards page is at{" "}
-                  <s-link href={`https://${shop}/apps/loyalty/rewards`} target="_blank">
+                  <a href={`https://${shop}/apps/loyalty/rewards`} target="_blank" rel="noreferrer" style={DARK_LINK}>
                     /apps/loyalty/rewards
-                  </s-link>
+                  </a>
                   . Add it to your navigation.
                 </>
               )}
@@ -170,7 +172,7 @@ export default function Home() {
         </Panel>
 
         <Columns>
-          <Panel title="Top members" subtitle="By points earned in total" right={<s-link href="/app/customers">All customers</s-link>}>
+          <Panel title="Top members" subtitle="By points earned in total" right={<Link to="/app/customers" style={DARK_LINK}>All customers</Link>}>
             <HBars
               empty="No members yet. They appear when a customer logs in or places an order."
               items={top.map((c) => ({ label: c.name, href: `/app/customers/${c.id}`, value: c.lifetime, sub: `${whole(c.balance)} held` }))}
@@ -189,7 +191,7 @@ export default function Home() {
                       <span style={{ width: 8, height: 8, borderRadius: 99, background: kind.color, flex: "none" }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          <s-link href={`/app/customers/${t.customerId}`}>{t.who}</s-link>
+                          <Link to={`/app/customers/${t.customerId}`} style={DARK_LINK}>{t.who}</Link>
                         </div>
                         <div style={{ fontSize: 12, color: "#6b7280" }}>
                           {kind.label} · {when(t.at)}

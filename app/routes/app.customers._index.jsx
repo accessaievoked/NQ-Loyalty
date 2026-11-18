@@ -1,4 +1,4 @@
-import { Form, useLoaderData } from "react-router";
+import { Form, Link, useLoaderData } from "react-router";
 import { requireStore } from "../services/auth.server";
 import db from "../db.server";
 import { referralCounts } from "../services/referralstats.server";
@@ -56,6 +56,8 @@ export const loader = async ({ request }) => {
   };
 };
 
+const DARK_LINK = { color: "#111827", textDecoration: "none" };
+
 export default function Customers() {
   const { rows, q, page, pages, total } = useLoaderData();
   const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), page: String(p) })}`;
@@ -93,7 +95,7 @@ export default function Customers() {
                   <s-table-row key={c.id}>
                     <s-table-cell>
                       <s-stack gap="small-500">
-                        <s-link href={`/app/customers/${c.id}`}>{c.name === "—" ? c.email : c.name}</s-link>
+                        <Link to={`/app/customers/${c.id}`} style={DARK_LINK}>{c.name === "—" ? c.email : c.name}</Link>
                         {c.name !== "—" && <s-text color="subdued">{c.email}</s-text>}
                       </s-stack>
                     </s-table-cell>
