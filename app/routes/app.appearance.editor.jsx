@@ -156,7 +156,7 @@ export default function Editor() {
   }, [fetcher, mode]);
 
   useEffect(() => {
-    if (fetcher.data?.ok) shopify.toast.show("Saved — live on your storefront");
+    if (fetcher.data?.ok) shopify.toast.show("Saved, live on your storefront");
     if (fetcher.data && fetcher.data.ok === false) shopify.toast.show(fetcher.data.error || "Could not save", { isError: true });
   }, [fetcher.data, shopify]);
 

@@ -112,7 +112,7 @@ export default function Developer() {
 
   useEffect(() => {
     if (fetcher.data?.ok) shopify.toast.show(fetcher.data.message || "Done");
-    if (fetcher.data?.ok === false) shopify.toast.show("Couldn't save — see the messages on the left", { isError: true });
+    if (fetcher.data?.ok === false) shopify.toast.show("Couldn't save, see the messages on the left", { isError: true });
   }, [fetcher.data, shopify]);
 
   const submit = useCallback(
@@ -203,7 +203,7 @@ export default function Developer() {
           <div>
             <div className="ed-title">Developer source</div>
             <div className="ed-sub">
-              {source.enabled ? "Live on your storefront" : "Not live — the visual editor is in use"}
+              {source.enabled ? "Live on your storefront" : "Not live: the visual editor is in use"}
               {dirty ? " · unpublished edits" : ""}
             </div>
           </div>
@@ -245,7 +245,7 @@ export default function Developer() {
             <div className="ed-pane-body">
               {errors.length > 0 && (
                 <div className="ed-note ed-note-error" role="alert">
-                  <strong>Not published — please fix:</strong>
+                  <strong>Not published, please fix:</strong>
                   <ul>{errors.map((e) => <li key={e}>{e}</li>)}</ul>
                 </div>
               )}

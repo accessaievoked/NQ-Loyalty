@@ -304,7 +304,7 @@ export default function Emails() {
         setSelectedId(null);
       }
     } else {
-      shopify.toast.show("Couldn't complete that — see the message on the left", { isError: true });
+      shopify.toast.show("Couldn't complete that, see the message on the left", { isError: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetcher.data]);

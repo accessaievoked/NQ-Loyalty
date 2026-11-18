@@ -206,6 +206,13 @@ textarea.ed-input { resize: vertical; }
   .ed-side { width: 100%; height: 46%; border-right: 0; border-bottom: 1px solid var(--ed-line); }
   .ed-top-center { display: none; }
 }
+@media (max-width: 560px) {
+  /* Below this, left (title) + right (Reset/Save) no longer fit on one 56px row — stack them
+     instead of letting the right-hand buttons get clipped off the edge. */
+  .ed-top { grid-template-columns: 1fr; grid-auto-rows: auto; height: auto; padding: 10px 12px; gap: 8px; }
+  .ed-top-left, .ed-top-right { flex-wrap: wrap; }
+  .ed-top-right { justify-content: flex-start; }
+}
 
 /* ---- sliders with an exact value box ---- */
 .ed-slider { display: flex; align-items: center; gap: 10px; }

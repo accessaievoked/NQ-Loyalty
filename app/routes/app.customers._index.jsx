@@ -33,7 +33,11 @@ export const loader = async ({ request }) => {
       take: PAGE,
     }),
   ]);
-  const referred = await referralCounts(store.id, rows.map((c) => c.id));
+  const [referred, orderCounts] = await Promise.all([
+    referralCounts(store.id, rows.map((c) => c.id)),
+    db.order.groupBy({ by: ["customerId"], where: { storeId: store.id, customerId: { in: rows.map((c) => c.id) } }, _count: { _all: true } }),
+  ]);
+  const ordersByCustomer = new Map(orderCounts.map((o) => [o.customerId, o._count._all]));
   return {
     q,
     page,
@@ -41,6 +45,7 @@ export const loader = async ({ request }) => {
     total,
     rows: rows.map((c) => ({
       id: c.id,
+      orders: ordersByCustomer.get(c.id) ?? 0,
       referred: referred.get(c.id) ?? 0,
       name: [c.firstName, c.lastName].filter(Boolean).join(" ") || "—",
       email: c.email || "—",
@@ -77,6 +82,7 @@ export default function Customers() {
             <s-table>
               <s-table-header-row>
                 <s-table-header listSlot="primary">Customer</s-table-header>
+                <s-table-header format="numeric">Orders</s-table-header>
                 <s-table-header format="numeric">Points</s-table-header>
                 <s-table-header format="numeric">Earned in total</s-table-header>
                 <s-table-header format="numeric">Referred</s-table-header>
@@ -91,6 +97,7 @@ export default function Customers() {
                         {c.name !== "—" && <s-text color="subdued">{c.email}</s-text>}
                       </s-stack>
                     </s-table-cell>
+                    <s-table-cell>{fmt(c.orders)}</s-table-cell>
                     <s-table-cell>{fmt(c.balance)}</s-table-cell>
                     <s-table-cell>{fmt(c.lifetime)}</s-table-cell>
                     <s-table-cell>{c.referred}</s-table-cell>

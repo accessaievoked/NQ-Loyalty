@@ -93,8 +93,8 @@ export default function Appearance() {
         <s-stack gap="base">
           <s-paragraph>
             The editor works like the theme editor: drag blocks into the order you want, add or remove them, and change
-            colours, corners, fonts and wording while watching a live preview. Four starting templates are included —
-            currently using <s-text type="strong">{TEMPLATES[template]?.label ?? "Classic"}</s-text> — and you can add
+            colours, corners, fonts and wording while watching a live preview. Four starting templates are included,
+            currently using <s-text type="strong">{TEMPLATES[template]?.label ?? "Classic"}</s-text>, and you can add
             your own CSS or HTML for anything beyond that.
           </s-paragraph>
           <s-stack direction="inline" gap="small">

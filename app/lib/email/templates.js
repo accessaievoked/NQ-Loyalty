@@ -260,7 +260,7 @@ const BADGES = { points_earned: "Points earned", redeemed: "Reward code", expiri
 export const EMAIL_PRESETS = {
   blush: {
     label: "Blush",
-    note: "Pink header band, label pill, left-aligned — like the Claura order emails",
+    note: "Pink header band, rounded label badge, left-aligned, like the Claura order emails",
     brandColors: true,
     theme: { brand: "#f18599", heading: "#1f1d1e", text: "#3a3a3a", muted: "#8b8b8b", background: "#f4f4f5", card: "#ffffff", radius: 7, font: "system", width: 600, pagePad: 24, padX: 40 },
     styles: {
@@ -270,7 +270,7 @@ export const EMAIL_PRESETS = {
       text: { size: 15, lineHeight: "1.7" },
       textMuted: { size: 13 },
       code: { box: "#fdf2f4", color: "#d9546b", borderColor: "#f4b8c3", borderW: 1, radius: 10, boxPad: 14 },
-      button: { box: "#f18599", radius: 60, boxPad: 12, size: 15, weight: "600", padTop: 18, padBottom: 30 },
+      button: { box: "#f18599", radius: 10, boxPad: 12, size: 15, weight: "600", padTop: 18, padBottom: 30 },
     },
     append: [
       ["footer", { text: "**Questions about your points?**\nJust reply to this email or reach us at {{support_email}}. We're happy to help." }, { bg: "#f18599", color: "#ffffff", align: "center", size: 13, padTop: 30, padBottom: 30 }],
