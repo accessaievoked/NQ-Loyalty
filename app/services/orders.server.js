@@ -26,13 +26,23 @@ export function computePurchasePoints(rules, amount) {
 }
 
 // Bonus points stacked on top of `computePurchasePoints`, keyed by which eligible order (1st,
-// 2nd, …) this is for the customer. `orderNumber` is 1-based.
+// 2nd, …) this is for the customer. `orderNumber` is 1-based. Each step is
+// { order, points, minOrderAmount, continuing }: an exact-order step only pays on that one order;
+// a `continuing` step pays on that order AND every later one, so the highest continuing step
+// reached "wins" once no exact step matches (an open-ended tail, e.g. "+100 from order 6 on").
+// A step's own `minOrderAmount` (not the rule's) gates whether it pays for this order.
 export function computeMilestoneBonus(rules, amount, orderNumber) {
   let total = 0;
   for (const r of rules) {
-    if (!r.active || r.type !== "ORDER_MILESTONE" || amount < money(r.minOrderAmount)) continue;
-    const step = (Array.isArray(r.milestones) ? r.milestones : []).find((s) => Number(s?.order) === orderNumber);
-    if (step) total += Math.max(0, Math.floor(Number(step.points) || 0));
+    if (!r.active || r.type !== "ORDER_MILESTONE") continue;
+    const steps = Array.isArray(r.milestones) ? r.milestones : [];
+    let step = steps.find((s) => !s?.continuing && Number(s?.order) === orderNumber);
+    if (!step) {
+      const reached = steps.filter((s) => s?.continuing && Number(s?.order) <= orderNumber);
+      step = reached.sort((a, b) => Number(b.order) - Number(a.order))[0];
+    }
+    if (!step || amount < money(step.minOrderAmount)) continue;
+    total += Math.max(0, Math.floor(Number(step.points) || 0));
   }
   return total;
 }

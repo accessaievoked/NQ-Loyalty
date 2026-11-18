@@ -128,9 +128,12 @@ export const action = async ({ request }) => {
           const row = m[1];
           const order = int(v, 1, 100000, 0);
           const stepPoints = int(f.get(`milestonePoints:${row}`), 0, 1000000, 0);
-          if (order > 0 && stepPoints > 0 && !seen.has(order)) {
-            seen.add(order);
-            steps.push({ order, points: stepPoints });
+          const stepMin = Math.max(0, Number(f.get(`milestoneMin:${row}`)) || 0);
+          const continuing = f.get(`milestoneContinuing:${row}`) === "on";
+          const dedupeKey = `${order}|${continuing ? 1 : 0}`;
+          if (order > 0 && stepPoints > 0 && !seen.has(dedupeKey)) {
+            seen.add(dedupeKey);
+            steps.push({ order, points: stepPoints, minOrderAmount: stepMin, continuing });
           }
         }
         steps.sort((a, b) => a.order - b.order);
@@ -264,9 +267,14 @@ function ruleSummary(r, money) {
     }
     case "PURCHASE_FIXED": return `${pts(r.value)} per order${min}`;
     case "ORDER_MILESTONE": {
-      if (!r.milestones?.length) return `Bonus points by order number${min}`;
-      const list = r.milestones.map((s) => `${ordinal(s.order)} order +${s.points}`).join(", ");
-      return `${list}${min}`;
+      if (!r.milestones?.length) return "Bonus points by order number";
+      const stepNote = (s) => (s.minOrderAmount > 0 ? ` (orders over ${money(s.minOrderAmount)})` : "");
+      const parts = r.milestones.map((s) =>
+        s.continuing
+          ? `+${s.points} on order ${ordinal(s.order)} and every order after${stepNote(s)}`
+          : `+${s.points} on order ${ordinal(s.order)}${stepNote(s)}`
+      );
+      return parts.join(" · ");
     }
     case "SIGNUP": return `${pts(r.value)} when someone joins`;
     case "REVIEW": return `${pts(r.value)} for each product review (needs Judge.me)`;
@@ -291,20 +299,23 @@ function presets(currency) {
   const step = currency === "JPY" ? 100 : 1; // value of 100 points
   return {
     earn: [
-      { key: "spend", title: "Points for every purchase", text: "Customers earn points on what they spend.", rule: { name: "Points per order", type: "PURCHASE_PER_CURRENCY", value: 1, minOrderAmount: 0 } },
-      { key: "big", title: "Bonus on big orders", text: "Extra points when an order is over a set amount.", rule: { name: "Big order bonus", type: "PURCHASE_FIXED", value: 100, minOrderAmount: big } },
+      { key: "spend", title: "Points for every purchase", text: "Customers earn points on what they spend, up to an optional cap per order.", rule: { name: "Points per order", type: "PURCHASE_PER_CURRENCY", value: 1, minOrderAmount: 0 } },
+      { key: "fixed", title: "Flat points every order", text: "The same fixed points on every order, regardless of its value.", rule: { name: "Points per order", type: "PURCHASE_FIXED", value: 50, minOrderAmount: 0 } },
+      { key: "big", title: "Bonus on big orders", text: "Extra fixed points, but only when an order is over a set amount.", rule: { name: "Big order bonus", type: "PURCHASE_FIXED", value: 100, minOrderAmount: big } },
       {
         key: "milestone",
-        title: "First, second, third order bonus",
-        text: "Extra points stacked on normal earning, by which order number this is for the customer.",
+        title: "Rewards by order number",
+        text: "Fixed points per order, regardless of its value, that depend on which order number this is for the customer — with a bonus that keeps going from some order onward.",
         rule: {
-          name: "First order bonus",
+          name: "Order rewards",
           type: "ORDER_MILESTONE",
           value: 0,
           minOrderAmount: 0,
-          "milestoneOrder:0": 1, "milestonePoints:0": 100,
-          "milestoneOrder:1": 2, "milestonePoints:1": 50,
-          "milestoneOrder:2": 3, "milestonePoints:2": 25,
+          "milestoneOrder:0": 2, "milestonePoints:0": 200,
+          "milestoneOrder:1": 3, "milestonePoints:1": 300,
+          "milestoneOrder:2": 4, "milestonePoints:2": 400,
+          "milestoneOrder:3": 5, "milestonePoints:3": 500,
+          "milestoneOrder:4": 6, "milestonePoints:4": 100, "milestoneContinuing:4": "on",
         },
       },
       { key: "welcome", title: "Welcome bonus", text: "Points when someone joins your rewards.", rule: { name: "Welcome bonus", type: "SIGNUP", value: 50, minOrderAmount: 0 } },
@@ -333,43 +344,69 @@ const toForm = (obj) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [
 
 // ---- row editors ---------------------------------------------------------------------------------
 
-// Order-number -> bonus-points ladder editor for ORDER_MILESTONE rules. Each step is submitted as
-// a pair of hidden/number inputs (`milestoneOrder:<row>` / `milestonePoints:<row>`); the row index
-// is just a React key, not meaningful to the server, which reads and sorts whatever pairs arrive.
-function MilestoneEditor({ steps, onChange }) {
+// Order-number -> bonus-points ladder editor for ORDER_MILESTONE rules. Each step submits a group
+// of hidden/number inputs named `milestone<Field>:<row>`; the row index is just a React key, not
+// meaningful to the server, which reads and sorts whatever rows arrive. A step can be a one-time
+// bonus on exactly that order number, or "keep going" (continuing), which also covers every later
+// order — the highest continuing step reached wins once no exact step matches, so a short ladder
+// (order 2, 3, 4…) can end in an open-ended tail like "+100 from order 6 on".
+function MilestoneEditor({ steps, onChange, currency }) {
   const addStep = () => {
     const nextOrder = (steps.reduce((m, s) => Math.max(m, s.order), 0) || 0) + 1;
-    onChange([...steps, { order: nextOrder, points: 0 }]);
+    onChange([...steps, { order: nextOrder, points: 0, minOrderAmount: 0, continuing: false }]);
   };
   const update = (i, patch) => onChange(steps.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   const remove = (i) => onChange(steps.filter((_, idx) => idx !== i));
 
   return (
     <s-stack gap="small">
-      <s-text type="strong">Bonus per order number</s-text>
-      <s-text color="subdued">Stacks on top of any other active earning rules. An order number with no step gets no bonus.</s-text>
+      <s-text type="strong">Points by order number</s-text>
+      <s-text color="subdued">
+        A fixed amount, regardless of the order's value (unless you set a minimum below) — stacks on top of any other active earning
+        rules. An order number with no step and no "keep going" step before it gets no bonus.
+      </s-text>
       {steps.map((s, i) => (
-        <s-stack key={i} direction="inline" gap="small" alignItems="end">
-          <s-number-field
-            label="Order number"
-            min="1"
-            step="1"
-            value={String(s.order)}
-            onChange={(e) => update(i, { order: int(e.currentTarget.value, 1, 100000, 1) })}
-          />
-          <input type="hidden" name={`milestoneOrder:${i}`} value={s.order} />
-          <s-number-field
-            label="Bonus points"
-            min="0"
-            step="1"
-            value={String(s.points)}
-            onChange={(e) => update(i, { points: int(e.currentTarget.value, 0, 1000000, 0) })}
-          />
-          <input type="hidden" name={`milestonePoints:${i}`} value={s.points} />
-          <s-button variant="tertiary" tone="critical" onClick={() => remove(i)}>
-            Remove
-          </s-button>
-        </s-stack>
+        <s-box key={i} padding="small-400" border="base" borderRadius="base" background="subdued">
+          <s-stack gap="small">
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(150px, 1fr))" gap="small">
+              <s-number-field
+                label="Order number"
+                min="1"
+                step="1"
+                value={String(s.order)}
+                onChange={(e) => update(i, { order: int(e.currentTarget.value, 1, 100000, 1) })}
+              />
+              <input type="hidden" name={`milestoneOrder:${i}`} value={s.order} />
+              <s-number-field
+                label="Points"
+                min="0"
+                step="1"
+                value={String(s.points)}
+                onChange={(e) => update(i, { points: int(e.currentTarget.value, 0, 1000000, 0) })}
+              />
+              <input type="hidden" name={`milestonePoints:${i}`} value={s.points} />
+              <s-number-field
+                label={`Minimum order (${currency})`}
+                min="0"
+                value={String(s.minOrderAmount || 0)}
+                details="0 = any order"
+                onChange={(e) => update(i, { minOrderAmount: Math.max(0, Number(e.currentTarget.value) || 0) })}
+              />
+              <input type="hidden" name={`milestoneMin:${i}`} value={s.minOrderAmount || 0} />
+            </s-grid>
+            <s-stack direction="inline" justifyContent="space-between" alignItems="center">
+              <s-checkbox
+                label="Also keep giving this on every later order"
+                checked={!!s.continuing}
+                onChange={(e) => update(i, { continuing: e.currentTarget.checked })}
+              />
+              {s.continuing && <input type="hidden" name={`milestoneContinuing:${i}`} value="on" />}
+              <s-button variant="tertiary" tone="critical" onClick={() => remove(i)}>
+                Remove step
+              </s-button>
+            </s-stack>
+          </s-stack>
+        </s-box>
       ))}
       <s-stack direction="inline">
         <s-button variant="tertiary" onClick={addStep} disabled={steps.length >= MAX_MILESTONE_STEPS || undefined}>
@@ -383,7 +420,9 @@ function MilestoneEditor({ steps, onChange }) {
 function RuleRow({ rule, currency, money }) {
   const fetcher = useFetcher();
   const [open, setOpen] = useState(false);
-  const [milestones, setMilestones] = useState(() => (rule.milestones?.length ? rule.milestones : [{ order: 1, points: 0 }]));
+  const [milestones, setMilestones] = useState(() =>
+    rule.milestones?.length ? rule.milestones : [{ order: 1, points: 0, minOrderAmount: 0, continuing: false }]
+  );
   useToast(fetcher);
   useEffect(() => {
     if (fetcher.state === "idle" && (fetcher.data?.ok === "Saved" || fetcher.data?.ok === "Removed")) setOpen(false);
@@ -398,7 +437,7 @@ function RuleRow({ rule, currency, money }) {
     : rule.type === "REVIEW" ? "Points per review"
     : rule.type === "REFERRAL_FRIEND" ? "Bonus points"
     : "Reward points";
-  const hasMin = !["SIGNUP", "REVIEW"].includes(rule.type);
+  const hasMin = !["SIGNUP", "REVIEW", "ORDER_MILESTONE"].includes(rule.type);
 
   return (
     <s-box padding="base" border="base" borderRadius="base">
@@ -453,7 +492,7 @@ function RuleRow({ rule, currency, money }) {
                   />
                 )}
               </s-grid>
-              {isMilestone && <MilestoneEditor steps={milestones} onChange={setMilestones} />}
+              {isMilestone && <MilestoneEditor steps={milestones} onChange={setMilestones} currency={currency} />}
               <s-stack direction="inline" justifyContent="space-between">
                 <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this rule?") && fetcher.submit({ intent: "rule-delete", id: rule.id }, { method: "post" })}>
                   Remove
