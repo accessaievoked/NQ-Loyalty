@@ -14,7 +14,14 @@ export function AppErrorBoundary() {
   // 2xx/3xx thrown by Shopify's auth helpers are handshake pages (App Bridge bootstrap, exit-iframe
   // redirect). Render their HTML as-is; the browser runs it and carries on to the real page.
   if (isRouteErrorResponse(error) && error.status < 400) {
-    return <div dangerouslySetInnerHTML={{ __html: typeof error.data === "string" && error.data ? error.data : "Loading..." }} />;
+    return (
+      <>
+        <div dangerouslySetInnerHTML={{ __html: typeof error.data === "string" && error.data ? error.data : "" }} />
+        <p style={{ fontFamily: "Inter, system-ui, sans-serif", fontSize: 13, color: "#6b7280", textAlign: "center", marginTop: "20vh" }}>
+          Loading... <a href="/app" style={{ color: "#111827" }}>Open Home</a> if this takes more than a few seconds.
+        </p>
+      </>
+    );
   }
 
   const notFound = isRouteErrorResponse(error) && error.status === 404;

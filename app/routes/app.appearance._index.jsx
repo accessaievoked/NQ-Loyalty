@@ -35,7 +35,7 @@ function ModeCard({ value, title, text, current, onPick, linkHref, linkText }) {
     <div
       style={{
         gridRow: "span 4", display: "grid", gridTemplateRows: "subgrid", rowGap: 12, padding: 16, borderRadius: 12,
-        border: active ? "2px solid #111827" : "1px solid #e4e6ea", background: active ? "#f7f7f8" : "#fff",
+        border: "1px solid #e4e6ea", background: active ? "#f7f7f8" : "#fff",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>

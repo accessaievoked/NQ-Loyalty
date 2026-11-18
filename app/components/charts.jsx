@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 
 // Small dependency-free SVG charts for the Analytics and Home pages. Everything is responsive
 // (SVG viewBox), readable without colour alone (legends and tooltips carry the numbers), and
@@ -399,7 +400,7 @@ export function HBars({ items, color = COLORS.blue, format = whole, empty = "Not
         <div key={i.label}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13, marginBottom: 5 }}>
             <span style={{ color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {i.href ? <a href={i.href} style={{ color: "#111827", textDecoration: "none" }}>{i.label}</a> : i.label}
+              {i.href ? <Link to={i.href} style={{ color: "#111827", textDecoration: "none" }}>{i.label}</Link> : i.label}
             </span>
             <span style={{ color: "#111827", fontWeight: 600, flex: "none" }}>
               {format(i.value)}
