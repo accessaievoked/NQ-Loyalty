@@ -16,10 +16,42 @@ export function computePurchasePoints(rules, amount) {
   let total = 0;
   for (const r of rules) {
     if (!r.active || amount < money(r.minOrderAmount)) continue;
-    if (r.type === "PURCHASE_PER_CURRENCY") total += Math.floor(amount * r.value);
-    else if (r.type === "PURCHASE_FIXED") total += r.value;
+    if (r.type === "PURCHASE_PER_CURRENCY") {
+      let pts = Math.floor(amount * r.value);
+      if (r.maxPoints) pts = Math.min(pts, r.maxPoints);
+      total += pts;
+    } else if (r.type === "PURCHASE_FIXED") total += r.value;
   }
   return total;
+}
+
+// Bonus points stacked on top of `computePurchasePoints`, keyed by which eligible order (1st,
+// 2nd, …) this is for the customer. `orderNumber` is 1-based.
+export function computeMilestoneBonus(rules, amount, orderNumber) {
+  let total = 0;
+  for (const r of rules) {
+    if (!r.active || r.type !== "ORDER_MILESTONE" || amount < money(r.minOrderAmount)) continue;
+    const step = (Array.isArray(r.milestones) ? r.milestones : []).find((s) => Number(s?.order) === orderNumber);
+    if (step) total += Math.max(0, Math.floor(Number(step.points) || 0));
+  }
+  return total;
+}
+
+// How many of the customer's other orders already reached the earn trigger before this one —
+// used as the 1-based "order number" for ORDER_MILESTONE rules. Counted from Order rows (not
+// PointsAward rows) so a first order worth 0 points still counts as order #1 for the next one.
+async function priorEligibleOrderCount(storeId, customerId, order) {
+  return prisma.order.count({
+    where: {
+      storeId,
+      customerId,
+      id: { not: order.id },
+      cancelledAt: null,
+      returnStatus: { not: "CLOSED" },
+      OR: [{ paidAt: { not: null } }, { fulfilledAt: { not: null } }, { deliveredAt: { not: null } }],
+      createdAt: { lt: order.createdAt },
+    },
+  });
 }
 
 // Merchandise value that earns points: after discounts, before shipping and tax, as it was when
@@ -259,9 +291,15 @@ export async function evaluateOrder(store, order) {
   if (existing) return existing;
 
   const rules = await prisma.earnRule.findMany({
-    where: { storeId: store.id, active: true, type: { in: ["PURCHASE_PER_CURRENCY", "PURCHASE_FIXED"] } },
+    where: { storeId: store.id, active: true, type: { in: ["PURCHASE_PER_CURRENCY", "PURCHASE_FIXED", "ORDER_MILESTONE"] } },
   });
-  const points = computePurchasePoints(rules, money(order.eligibleAmount));
+  const eligibleAmount = money(order.eligibleAmount);
+  let points = computePurchasePoints(rules, eligibleAmount);
+  const milestoneRules = rules.filter((r) => r.type === "ORDER_MILESTONE");
+  if (milestoneRules.length) {
+    const orderNumber = 1 + (await priorEligibleOrderCount(store.id, order.customerId, order));
+    points += computeMilestoneBonus(milestoneRules, eligibleAmount, orderNumber);
+  }
   if (points <= 0) return null;
 
   const releaseAt = new Date(reachedAt.getTime() + settings.holdDays * DAY);

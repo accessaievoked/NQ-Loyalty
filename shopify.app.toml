@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "d944697f55586a80d605cdc446bc5a98"
-name = "LoyaltyApp"
-application_url = "https://example.com"
+name = "nq-loyalty-claura"
+application_url = "https://nq-loyalty-claura.fly.dev"
 embedded = true
 
 [access_scopes]
@@ -50,12 +50,12 @@ api_version = "2026-07"
 
 # Storefront requests (/apps/loyalty/*) are forwarded here with a signed query string.
 [app_proxy]
-url = "https://example.com/proxy"
+url = "https://nq-loyalty-claura.fly.dev/proxy"
 subpath = "loyalty"
 prefix = "apps"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://nq-loyalty-claura.fly.dev/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true

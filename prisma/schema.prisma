@@ -250,8 +250,9 @@ model OrderRefund {
 // ---------------------------------------------------------------------------------------
 
 enum EarnRuleType {
-  PURCHASE_PER_CURRENCY // `value` points per 1 unit of store currency spent
+  PURCHASE_PER_CURRENCY // `value` points per 1 unit of store currency spent, optionally capped by `maxPoints`
   PURCHASE_FIXED // `value` points per eligible order
+  ORDER_MILESTONE // bonus points stacked on top of normal earning, keyed by the customer's Nth eligible order; see `milestones`
   SIGNUP // `value` points once when a customer joins
   REFERRAL_FRIEND // `value` bonus points for the new customer on their first qualifying order
   REFERRAL_REFERRER // `value` points for the referrer when their friend's first order qualifies
@@ -266,6 +267,12 @@ model EarnRule {
   type           EarnRuleType
   value          Int
   minOrderAmount Decimal      @default(0) @db.Decimal(12, 2)
+  // PURCHASE_PER_CURRENCY only: caps the points this rule awards on a single order. Null/0 = no cap.
+  maxPoints      Int?
+  // ORDER_MILESTONE only: [{"order":1,"points":100},{"order":2,"points":50}, ...] — the bonus paid
+  // when this order is the customer's 1st, 2nd, … eligible order. An order past the highest listed
+  // number gets no bonus from this rule.
+  milestones     Json?
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt

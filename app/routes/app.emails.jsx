@@ -407,7 +407,7 @@ export default function Emails() {
     <div className="ed">
       <header className="ed-top">
         <div className="ed-top-left">
-          <Link to="/app/home" className="ed-back" aria-label="Back to home"><ArrowLeft /></Link>
+          <Link to="/app" className="ed-back" aria-label="Back to home"><ArrowLeft /></Link>
           <div>
             <div className="ed-title">Emails</div>
             <div className="ed-sub">{section === "settings" ? "Sending settings" : dirty ? "Unsaved changes" : custom[kind] ? "Customised" : "Using the default"}</div>
