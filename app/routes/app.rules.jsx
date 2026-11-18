@@ -1023,9 +1023,16 @@ export default function Rules() {
           text="Optional. Only needed if you use Shiprocket Checkout instead of Shopify's own checkout, so customers can still spend points there."
         >
           <Card>
-            <div style={{ padding: 16 }}>
-              <FastCheckout fc={fastCheckout} />
-            </div>
+            {/* Collapsed by default: it holds a secret key and is only needed by Shiprocket Checkout stores. */}
+            <details>
+              <summary style={{ cursor: "pointer", padding: "14px 16px", fontSize: 14, fontWeight: 600, color: "#111827", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Shiprocket settings{fastCheckout.enabled ? " (on)" : " (off)"}</span>
+                <span style={{ fontSize: 13, fontWeight: 400, color: "#6b7280" }}>Click to show or hide</span>
+              </summary>
+              <div style={{ padding: 16, borderTop: "1px solid #eceef1" }}>
+                <FastCheckout fc={fastCheckout} />
+              </div>
+            </details>
           </Card>
         </SectionRow>
 
