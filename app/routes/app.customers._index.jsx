@@ -141,14 +141,14 @@ export default function Customers() {
             </s-table>
           )}
 
-          <s-stack direction="inline" gap="small" justifyContent="space-between" alignItems="center">
-            <s-text color="subdued">
-              {total} member{total === 1 ? "" : "s"} · page {page} of {pages}
-            </s-text>
+          <s-stack direction="inline" gap="base" alignItems="center">
             <s-stack direction="inline" gap="small">
               <s-button icon="chevron-left" accessibilityLabel="Previous page" disabled={page <= 1 || undefined} href={link(page - 1)} />
               <s-button icon="chevron-right" accessibilityLabel="Next page" disabled={page >= pages || undefined} href={link(page + 1)} />
             </s-stack>
+            <s-text color="subdued">
+              {total} member{total === 1 ? "" : "s"} · page {page} of {pages}
+            </s-text>
           </s-stack>
         </s-stack>
       </s-section>
