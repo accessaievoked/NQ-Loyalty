@@ -3,13 +3,14 @@ import { requireStore } from "../services/auth.server";
 import db from "../db.server";
 import { referralCounts } from "../services/referralstats.server";
 
-const PAGE = 25;
+const PAGE = 10;
 const fmt = (n) => new Intl.NumberFormat("en-IN").format(n);
 
 export const loader = async ({ request }) => {
   const { store } = await requireStore(request);
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim();
+  const sort = url.searchParams.get("sort") === "asc" ? "asc" : "desc";
   const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
 
   const where = {
@@ -28,7 +29,7 @@ export const loader = async ({ request }) => {
     db.customer.count({ where }),
     db.customer.findMany({
       where,
-      orderBy: [{ lifetimePoints: "desc" }, { createdAt: "desc" }],
+      orderBy: [{ lifetimePoints: sort }, { createdAt: "desc" }],
       skip: (page - 1) * PAGE,
       take: PAGE,
     }),
@@ -40,6 +41,7 @@ export const loader = async ({ request }) => {
   const ordersByCustomer = new Map(orderCounts.map((o) => [o.customerId, o._count._all]));
   return {
     q,
+    sort,
     page,
     pages: Math.max(1, Math.ceil(total / PAGE)),
     total,
@@ -60,8 +62,9 @@ export const loader = async ({ request }) => {
 const DARK_LINK = { color: "#111827", textDecoration: "none" };
 
 export default function Customers() {
-  const { rows, q, page, pages, total } = useLoaderData();
-  const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), page: String(p) })}`;
+  const { rows, q, sort, page, pages, total } = useLoaderData();
+  const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), ...(sort === "asc" ? { sort } : {}), page: String(p) })}`;
+  const sortLink = `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), sort: sort === "asc" ? "desc" : "asc" })}`;
 
   return (
     <s-page heading="Customers">
@@ -71,11 +74,17 @@ export default function Customers() {
       <s-section>
         <s-stack gap="base">
           <Form method="get">
+            <input type="hidden" name="sort" value={sort} />
             <s-stack direction="inline" gap="small" alignItems="end">
-              <div style={{ maxWidth: 320 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <s-search-field label="Search" labelAccessibilityVisibility="exclusive" name="q" value={q} placeholder="Search name or email" />
               </div>
               <s-button type="submit" icon="search" accessibilityLabel="Search" />
+              <s-button
+                icon="sort"
+                accessibilityLabel={sort === "asc" ? "Sorted lowest points first; click for highest first" : "Sorted highest points first; click for lowest first"}
+                href={sortLink}
+              />
             </s-stack>
           </Form>
 

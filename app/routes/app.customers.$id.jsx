@@ -18,7 +18,7 @@ function orderStatus(o) {
 }
 
 export const loader = async ({ request, params }) => {
-  const { store } = await requireStore(request);
+  const { store, session } = await requireStore(request);
   // Scoped by store: another shop's customer id simply 404s.
   const customer = await db.customer.findFirst({ where: { id: params.id, storeId: store.id } });
   if (!customer) throw new Response("Not found", { status: 404 });
@@ -63,6 +63,7 @@ export const loader = async ({ request, params }) => {
       balance: customer.pointsBalance,
       lifetime: customer.lifetimePoints,
       referralCode: customer.referralCode,
+      referralLink: customer.referralCode ? `https://${session.shop}/?ref=${customer.referralCode}` : "",
       joinedAt: customer.createdAt.toISOString().slice(0, 10),
     },
     currency: store.currency,
@@ -167,9 +168,11 @@ function InfoCard({ items }) {
         >
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 12, color: "#6b7280" }}>{it.label}</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.value || "Not set"}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: it.value ? "#111827" : "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {it.value || it.empty || "Not set"}
+            </div>
           </div>
-          {it.value && (
+          {it.value && !it.noCopy && (
             <button
               type="button"
               onClick={() => copy(it.label, it.value)}
@@ -422,7 +425,10 @@ export default function CustomerDetail() {
                   { label: "Email", value: customer.email },
                   { label: "Phone", value: customer.phone },
                   { label: "Shopify customer ID", value: customer.shopifyId },
-                  { label: "Referral code", value: customer.referralCode },
+                  { label: "Referral link", value: customer.referralLink, empty: "Hasn't generated a referral link yet" },
+                  ...(referrals.referredBy
+                    ? [{ label: "Referred by", value: referrals.referredBy.name, noCopy: true }]
+                    : []),
                 ]}
               />
             </div>
