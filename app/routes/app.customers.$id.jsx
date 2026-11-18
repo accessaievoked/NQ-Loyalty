@@ -250,7 +250,12 @@ export default function CustomerDetail() {
 
   return (
     <s-page heading={customer.name}>
-      <s-section>
+      {/* Plain divs directly under <s-page>, never inside <s-section>: Shopify's web component
+          restructures <s-section>'s children on upgrade, which raced React's hydration here and
+          crashed the render (React errors #418/#423) down to a near-blank page. <s-page> itself
+          doesn't do that — this mirrors the one other page in the app with custom-styled content
+          (Home), which has never hit this. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <StatRow
           items={[
             { label: "Total orders", value: stats.totalOrders },
@@ -259,9 +264,7 @@ export default function CustomerDetail() {
             { label: "Customer since", value: customer.joinedAt },
           ]}
         />
-      </s-section>
 
-      <s-section>
         <style>{"@media (min-width:860px){.cust-detail-grid{grid-template-columns:minmax(0,2fr) minmax(260px,1fr) !important}}"}</style>
         <div className="cust-detail-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 20, alignItems: "start" }}>
           <div style={{ minWidth: 0 }}>
@@ -456,7 +459,7 @@ export default function CustomerDetail() {
             </div>
           </div>
         </div>
-      </s-section>
+      </div>
     </s-page>
   );
 }

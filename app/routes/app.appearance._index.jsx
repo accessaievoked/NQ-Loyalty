@@ -24,21 +24,24 @@ export const action = async ({ request }) => {
   return { ok: displayMode === "PAGE" ? "Rewards page selected" : "Floating widget selected" };
 };
 
+// The grid stretches every card to the tallest one's height, but a shorter card's own content
+// (title/text/link) doesn't — so its button floats above the bottom instead of lining up with the
+// other card's. A flex column pins the button to the bottom regardless of how much text precedes it.
 function ModeCard({ value, title, text, current, onPick, children }) {
   const active = current === value;
   return (
     <s-box padding="base" border={active ? "large" : "base"} borderRadius="large" background={active ? "subdued" : "base"}>
-      <s-stack gap="base">
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 12 }}>
         <s-stack direction="inline" justifyContent="space-between" alignItems="center">
           <s-heading>{title}</s-heading>
           {active && <s-badge tone="success">In use</s-badge>}
         </s-stack>
         <s-paragraph>{text}</s-paragraph>
-        {children}
+        <div style={{ flex: 1 }}>{children}</div>
         <s-button variant={active ? "secondary" : "primary"} disabled={active || undefined} onClick={() => onPick(value)}>
           {active ? "Selected" : `Use ${title.toLowerCase()}`}
         </s-button>
-      </s-stack>
+      </div>
     </s-box>
   );
 }

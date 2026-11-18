@@ -606,15 +606,18 @@ function PresetGallery({ items, existing, singleton, onAdd, busy }) {
         const has = singleton && singleton(p, existing);
         return (
           <s-box key={p.key} padding="base" border="base" borderRadius="base" background="subdued">
-            <s-stack gap="small">
+            {/* flex column + a flexed spacer keeps every card's "Add" button on the same line,
+                regardless of how many lines its title/description take. */}
+            <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
               <s-text type="strong">{p.title}</s-text>
               <s-text color="subdued">{p.text}</s-text>
+              <div style={{ flex: 1 }} />
               <s-stack direction="inline">
                 <s-button disabled={has || busy || undefined} onClick={() => onAdd(p)}>
                   {has ? "Already added" : "Add"}
                 </s-button>
               </s-stack>
-            </s-stack>
+            </div>
           </s-box>
         );
       })}
