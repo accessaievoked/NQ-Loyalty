@@ -143,6 +143,7 @@ export async function processReview(store, review) {
     // One reward per customer per product, however many times they review it.
     key: `review:${customer.id}:${productKey}`,
     reason: "thank you for your review",
+    notify: rule.notify,
   });
   return result?.duplicate ? "ignored: already rewarded for this product" : `rewarded ${rule.value} points`;
 }

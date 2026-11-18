@@ -1,0 +1,14 @@
+// Removed from app/routes/customer-account.api.jsx (inside the try block, before the referral branch).
+// It needs `redeemReward` imported from ../services/redeem.server.
+
+    if (body.action === "redeem") {
+      const r = await redeemReward({
+        store,
+        admin,
+        customerId: customer.id,
+        rewardId: String(body.rewardId || ""),
+        requestId: String(body.requestId || ""),
+        points: body.points,
+      });
+      return json({ ok: true, code: r.code });
+    }

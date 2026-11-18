@@ -415,7 +415,7 @@ export default function Emails() {
         </div>
         <div className="ed-top-center">
           <div className="ed-seg" role="group" aria-label="Email">
-            {Object.entries(EMAIL_KINDS).map(([k, v]) => (
+            {Object.entries(EMAIL_KINDS).filter(([k]) => k !== "redeemed").map(([k, v]) => (
               <button key={k} type="button" className={section === "emails" && kind === k ? "on" : ""} onClick={() => { setKind(k); setSection("emails"); setSelectedId(null); }}>
                 {v.label}
                 {JSON.stringify(drafts[k]) !== saved[k] ? " •" : ""}

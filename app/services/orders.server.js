@@ -12,39 +12,43 @@ const DAY = 86400000; // day in ms
 // Points maths
 // ---------------------------------------------------------------------------------------
 
-export function computePurchasePoints(rules, amount) {
-  let total = 0;
-  for (const r of rules) {
-    if (!r.active || amount < money(r.minOrderAmount)) continue;
-    if (r.type === "PURCHASE_PER_CURRENCY") {
-      let pts = Math.floor(amount * r.value);
-      if (r.maxPoints) pts = Math.min(pts, r.maxPoints);
-      total += pts;
-    } else if (r.type === "PURCHASE_FIXED") total += r.value;
+// Points one rule gives for an order of `amount` that is the customer's `orderNumber`th (1-based).
+function rulePoints(r, amount, orderNumber) {
+  if (r.type === "PURCHASE_PER_CURRENCY") {
+    if (amount < money(r.minOrderAmount)) return 0;
+    const pts = Math.floor(amount * r.value);
+    return r.maxPoints ? Math.min(pts, r.maxPoints) : pts;
   }
-  return total;
+  if (r.type === "PURCHASE_FIXED") return amount < money(r.minOrderAmount) ? 0 : r.value;
+  if (r.type === "ORDER_MILESTONE") {
+    // An exact-order step only pays on that order; a `continuing` step pays on that order AND every later
+    // one (the highest one reached wins once no exact step matches). A step's own minimum order gates it.
+    const steps = Array.isArray(r.milestones) ? r.milestones : [];
+    let step = steps.find((x) => !x?.continuing && Number(x?.order) === orderNumber);
+    if (!step) {
+      const reached = steps.filter((x) => x?.continuing && Number(x?.order) <= orderNumber);
+      step = reached.sort((p, q) => Number(q.order) - Number(p.order))[0];
+    }
+    if (!step || amount < money(step.minOrderAmount)) return 0;
+    return Math.max(0, Math.floor(Number(step.points) || 0));
+  }
+  return 0;
 }
 
-// Bonus points stacked on top of `computePurchasePoints`, keyed by which eligible order (1st,
-// 2nd, …) this is for the customer. `orderNumber` is 1-based. Each step is
-// { order, points, minOrderAmount, continuing }: an exact-order step only pays on that one order;
-// a `continuing` step pays on that order AND every later one, so the highest continuing step
-// reached "wins" once no exact step matches (an open-ended tail, e.g. "+100 from order 6 on").
-// A step's own `minOrderAmount` (not the rule's) gates whether it pays for this order.
-export function computeMilestoneBonus(rules, amount, orderNumber) {
-  let total = 0;
+// What an order earns from all the active purchase rules. Rules that "combine" (the default) add up.
+// A rule that doesn't combine can't be added to the others: the customer gets that rule's points or
+// the combined total of the rest, whichever is more.
+export function computeOrderPoints(rules, amount, orderNumber) {
+  let stacked = 0;
+  let bestAlone = 0;
   for (const r of rules) {
-    if (!r.active || r.type !== "ORDER_MILESTONE") continue;
-    const steps = Array.isArray(r.milestones) ? r.milestones : [];
-    let step = steps.find((s) => !s?.continuing && Number(s?.order) === orderNumber);
-    if (!step) {
-      const reached = steps.filter((s) => s?.continuing && Number(s?.order) <= orderNumber);
-      step = reached.sort((a, b) => Number(b.order) - Number(a.order))[0];
-    }
-    if (!step || amount < money(step.minOrderAmount)) continue;
-    total += Math.max(0, Math.floor(Number(step.points) || 0));
+    if (!r.active) continue;
+    const pts = rulePoints(r, amount, orderNumber);
+    if (pts <= 0) continue;
+    if (r.combine === false) bestAlone = Math.max(bestAlone, pts);
+    else stacked += pts;
   }
-  return total;
+  return Math.max(stacked, bestAlone);
 }
 
 // How many of the customer's other orders already reached the earn trigger before this one —
@@ -304,12 +308,9 @@ export async function evaluateOrder(store, order) {
     where: { storeId: store.id, active: true, type: { in: ["PURCHASE_PER_CURRENCY", "PURCHASE_FIXED", "ORDER_MILESTONE"] } },
   });
   const eligibleAmount = money(order.eligibleAmount);
-  let points = computePurchasePoints(rules, eligibleAmount);
-  const milestoneRules = rules.filter((r) => r.type === "ORDER_MILESTONE");
-  if (milestoneRules.length) {
-    const orderNumber = 1 + (await priorEligibleOrderCount(store.id, order.customerId, order));
-    points += computeMilestoneBonus(milestoneRules, eligibleAmount, orderNumber);
-  }
+  const needsOrderNumber = rules.some((r) => r.type === "ORDER_MILESTONE");
+  const orderNumber = needsOrderNumber ? 1 + (await priorEligibleOrderCount(store.id, order.customerId, order)) : 0;
+  const points = computeOrderPoints(rules, eligibleAmount, orderNumber);
   if (points <= 0) return null;
 
   const releaseAt = new Date(reachedAt.getTime() + settings.holdDays * DAY);
@@ -380,7 +381,13 @@ export async function releaseAward(awardId) {
     throw e;
   }
 
-  if (!result.duplicate) {
+  // Email only if at least one of the purchase rules has its "email the customer" switch on.
+  const purchaseRules = await prisma.earnRule.findMany({
+    where: { storeId: award.storeId, active: true, type: { in: ["PURCHASE_PER_CURRENCY", "PURCHASE_FIXED", "ORDER_MILESTONE"] } },
+    select: { notify: true },
+  });
+  const notifyOn = purchaseRules.length === 0 || purchaseRules.some((r) => r.notify);
+  if (!result.duplicate && notifyOn) {
     await notifyCustomer({
       storeId: award.storeId,
       customerId: award.customerId,

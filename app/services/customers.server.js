@@ -107,6 +107,7 @@ export async function grantSignupBonus(customer) {
     source: "signup",
     key: `signup:${customer.id}`,
     reason: rule.name || "Welcome bonus",
+    notify: rule.notify,
   });
 }
 

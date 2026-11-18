@@ -139,7 +139,7 @@ export default function Home() {
           {[
             <Figure key="m" label="Members" value={whole(members)} hint={`+${whole(sum(last30, "members"))} in 30 days`} values={col(last30, "members")} color={COLORS.purple} />,
             <Figure key="e" label="Points earned" value={compact(sum(last30, "earned"))} hint="last 30 days" values={col(last30, "earned")} color={COLORS.blue} />,
-            <Figure key="r" label="Points redeemed" value={compact(sum(last30, "redeemed"))} hint={`${whole(activeCodes)} codes live`} values={col(last30, "redeemed")} color={COLORS.orange} />,
+            <Figure key="r" label="Points redeemed" value={compact(sum(last30, "redeemed"))} hint="last 30 days" values={col(last30, "redeemed")} color={COLORS.orange} />,
             <Figure key="v" label="Member revenue" value={money(sum(last30, "revenue"))} hint={`${whole(sum(last30, "orders"))} orders · 30 days`} values={col(last30, "revenue")} color={COLORS.green} />,
           ]}
         </FiguresStrip>

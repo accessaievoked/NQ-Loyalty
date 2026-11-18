@@ -1,0 +1,126 @@
+// Removed from app/routes/app.rules.jsx when points moved to Shiprocket-only redemption (no Shopify codes).
+// Paste back to restore the old reward types and the "which codes can be combined" grid.
+
+// ---- REWARD_TYPES
+const REWARD_TYPES = {
+  CUSTOM_AMOUNT: "Customer picks points",
+  FIXED_AMOUNT: "Fixed amount off",
+  PERCENTAGE: "Percentage off",
+  FREE_SHIPPING: "Free shipping",
+};
+
+
+// ---- presets().redeem
+    redeem: [
+      { key: "any", title: "Spend any amount of points", text: "The customer chooses how many points to use. Works in Shiprocket checkout too, and can be limited by cart value.", reward: { name: "Use points at checkout", type: "CUSTOM_AMOUNT", value: step, pointsCost: 100, minPoints: 100, maxPoints: 2000, minOrderAmount: 0, codeValidDays: 30 } },
+      { key: "fixed", title: "Fixed amount off", text: "A set discount for a set number of points.", reward: { name: `${off} off your order`, type: "FIXED_AMOUNT", value: off, pointsCost: Math.round((off / step) * 100), minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 30 } },
+      { key: "percent", title: "Percentage off", text: "A percentage discount for a set number of points.", reward: { name: "10% off your order", type: "PERCENTAGE", value: 10, pointsCost: 1500, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 30 } },
+      { key: "ship", title: "Free shipping", text: "Waive shipping for a set number of points.", reward: { name: "Free shipping", type: "FREE_SHIPPING", value: 0, pointsCost: 800, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 30 } },
+    ],
+
+// ---- StackGrid component (needs the Rules page's SectionRow/Card around it)
+// Which reward codes a customer may hold at the same time. Ticked = can be used together.
+function StackGrid({ rewards }) {
+  const fetcher = useFetcher();
+  useToast(fetcher);
+  const busy = fetcher.state !== "idle" || undefined;
+  const pairKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const fromRewards = () => {
+    const ok = new Set();
+    for (const a of rewards) for (const b of rewards) if (!(a.noStackWith.includes(b.id) || b.noStackWith.includes(a.id))) ok.add(pairKey(a.id, b.id));
+    return ok;
+  };
+  const [allowed, setAllowed] = useState(fromRewards);
+  const initial = JSON.stringify([...fromRewards()].sort());
+  const dirty = JSON.stringify([...allowed].sort()) !== initial;
+  const toggle = (a, b) =>
+    setAllowed((cur) => {
+      const next = new Set(cur);
+      const k = pairKey(a, b);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const save = () => {
+    const body = { intent: "stack-save" };
+    for (const k of allowed) body[`ok:${k}`] = "1";
+    fetcher.submit(body, { method: "post" });
+  };
+  const cell = { padding: "8px 10px", textAlign: "center", borderTop: "1px solid #eceef1" };
+  const short = (name) => (name.length > 22 ? `${name.slice(0, 21)}…` : name);
+
+  return (
+    <s-stack gap="base">
+      <s-paragraph>
+        Tick the rewards a customer may hold at the same time, so their codes can be used together in one order. A pair you leave unticked
+        can&apos;t coexist: if they already have an unused code for one, they can&apos;t redeem the other until it&apos;s used or expires. The
+        box where a reward meets itself means two of the same reward at once.
+      </s-paragraph>
+      <div style={{ border: "1px solid #e4e6ea", borderRadius: 12, overflow: "hidden" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13.5 }}>
+          <thead>
+            <tr style={{ background: "#f7f8fa" }}>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600 }} />
+              {rewards.map((r) => (
+                <th key={r.id} style={{ ...cell, borderTop: 0, fontWeight: 600 }} title={r.name}>
+                  {short(r.name)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rewards.map((a) => (
+              <tr key={a.id}>
+                <th style={{ ...cell, textAlign: "left", fontWeight: 600, background: "#f7f8fa" }} title={a.name}>
+                  {short(a.name)}
+                </th>
+                {rewards.map((b) => (
+                  <td key={b.id} style={cell}>
+                    <input
+                      type="checkbox"
+                      checked={allowed.has(pairKey(a.id, b.id))}
+                      onChange={() => toggle(a.id, b.id)}
+                      aria-label={a.id === b.id ? `Two “${a.name}” codes at once` : `“${a.name}” together with “${b.name}”`}
+                      style={{ width: 18, height: 18, accentColor: "#111827", cursor: "pointer" }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <s-stack direction="inline" gap="small" justifyContent="space-between">
+        <s-button
+          variant="tertiary"
+          onClick={() => setAllowed(new Set(rewards.flatMap((a) => rewards.map((b) => pairKey(a.id, b.id)))))}
+        >
+          Allow every combination
+        </s-button>
+        <s-button variant="primary" onClick={save} loading={busy} disabled={!dirty || undefined}>
+          Save combinations
+        </s-button>
+      </s-stack>
+      <s-text color="subdued">
+        Shopify decides how the discounts apply at checkout; we only decide which codes can exist together. Codes already issued aren&apos;t changed.
+      </s-text>
+    </s-stack>
+  );
+}
+
+
+// ---- action intents (stack-save / stack-clear)
+    // ---- which reward codes may be held together
+    if (intent === "stack-save") {
+      const allowed = new Set();
+      for (const [k] of f.entries()) if (String(k).startsWith("ok:")) allowed.add(String(k).slice(3));
+      await saveStackRules(store.id, allowed);
+      return { ok: "Combinations saved" };
+    }
+    if (intent === "stack-clear") {
+      await clearStackRules(store.id);
+      return { ok: "Every combination is allowed again" };
+    }
+
+
+// (the previous RewardRow with the code-reward fields is in git history: commit 9600617 and earlier)

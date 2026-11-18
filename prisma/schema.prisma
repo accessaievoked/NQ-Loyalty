@@ -273,6 +273,11 @@ model EarnRule {
   // when this order is the customer's 1st, 2nd, … eligible order. An order past the highest listed
   // number gets no bonus from this rule.
   milestones     Json?
+  // Email the customer when this rule gives them points.
+  notify         Boolean      @default(true)
+  // Purchase rules only: true = this rule's points add to the other earning rules' points; false =
+  // the customer gets this rule's points OR the others' combined total, whichever is more.
+  combine        Boolean      @default(true)
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt

@@ -71,37 +71,6 @@ export function variableValue(v, points) {
   return Math.floor(points / v.step) * v.unitValue;
 }
 
-function renderVariableReward(r, s, state, balance) {
-  const v = r.variable;
-  const cap = Math.min(balance, v.max || Infinity);
-  const top = Math.floor(cap / v.step) * v.step;
-  const can = state.loggedIn && top >= v.min;
-  const start = can ? Math.max(v.min, Math.min(top, v.min)) : v.min;
-  const money = (p) => formatMoney(variableValue(v, p), state.shop && state.shop.currency);
-  const info = `<span class="lw-muted lw-small lw-block-text">${esc(r.description)}${
-    v.max ? ` · up to ${esc(v.max)} points` : ""
-  }</span>`;
-
-  if (!state.loggedIn) {
-    return `<li class="lw-card"><span class="lw-strong">${esc(r.name)}</span>${info}</li>`;
-  }
-  if (!can) {
-    return `<li class="lw-card"><span class="lw-strong">${esc(r.name)}</span>${info}<span class="lw-muted lw-small lw-block-text">You need at least ${esc(
-      v.min,
-    )} points to use this.</span></li>`;
-  }
-  return `<li class="lw-card lw-var">
-    <span class="lw-strong">${esc(r.name)}</span>${info}
-    <div class="lw-var-row">
-      <input class="lw-range" type="range" min="${v.min}" max="${top}" step="${v.step}" value="${start}" data-points="${esc(r.id)}" aria-label="Points to use" />
-    </div>
-    <div class="lw-var-foot">
-      <span><strong data-calc-points="${esc(r.id)}">${start}</strong> points = <strong data-calc-money="${esc(r.id)}">${esc(money(start))}</strong> off</span>
-      <button class="lw-btn lw-btn-sm" data-action="redeem" data-reward="${esc(r.id)}" type="button">${esc(s.buttonText)}</button>
-    </div>
-  </li>`;
-}
-
 function renderBlock(block, state) {
   const s = block.settings;
   switch (block.type) {
@@ -201,57 +170,12 @@ function renderBlock(block, state) {
     }
 
     case "redeem": {
-      if (state.fastCheckout) {
-        return `<div class="lw-block">${s.title ? `<div class="lw-title">${esc(s.title)}</div>` : ""}<div class="lw-card"><div class="lw-strong">Use your points at checkout</div><p class="lw-muted lw-small lw-tight">Enter your mobile number on the checkout page and choose how many points to use. The discount is applied automatically, with no code to copy.</p></div></div>`;
-      }
-      const points = state.customer?.points ?? 0;
-      const rows = (state.rewards || [])
-        .map((r) => {
-          if (r.variable) return renderVariableReward(r, s, state, points);
-          const can = state.loggedIn && points >= r.cost;
-          const action = state.loggedIn
-            ? `<button class="lw-btn lw-btn-sm" data-action="redeem" data-reward="${esc(r.id)}" type="button" ${
-                can ? "" : "disabled"
-              }>${esc(s.buttonText)}</button>`
-            : "";
-          return `<li class="lw-card lw-reward"><span class="lw-grow"><span class="lw-strong">${esc(
-            r.name,
-          )}</span><span class="lw-muted lw-small lw-block-text">${esc(r.cost)} points${
-            r.description ? ` · ${esc(r.description)}` : ""
-          }</span></span>${action}</li>`;
-        })
-        .join("");
-      return `<div class="lw-block">${s.title ? `<div class="lw-title">${esc(s.title)}</div>` : ""}<ul class="lw-list lw-gap">${
-        rows || `<li class="lw-muted lw-small">${esc(s.emptyText)}</li>`
-      }</ul></div>`;
+      // Points are spent in the Shiprocket checkout (no codes). The code-based version is in unused-code/widget.
+      return `<div class="lw-block">${s.title ? `<div class="lw-title">${esc(s.title)}</div>` : ""}<div class="lw-card"><div class="lw-strong">Use your points at checkout</div><p class="lw-muted lw-small lw-tight">Enter your mobile number on the checkout page and choose how many points to use. The discount is applied automatically, with no code to copy.</p></div></div>`;
     }
 
-    case "coupons": {
-      if (state.fastCheckout && !(state.coupons || []).length) return "";
-      const list = (state.coupons || [])
-        // "Used" and "expired" codes stay visible as history, so a customer can always see what they claimed.
-        .filter((c) => s.showUsed !== false || !c.status || c.status === "ACTIVE")
-        .map((c) => {
-          const active = !c.status || c.status === "ACTIVE";
-          const badge = active
-            ? ""
-            : `<span class="lw-badge">${c.status === "USED" ? "Used" : "Expired"}</span>`;
-          const actions = active
-            ? `<span class="lw-btns"><button class="lw-btn lw-btn-sm lw-btn-outline" data-action="copy" data-code="${esc(
-                c.code,
-              )}" type="button">Copy</button></span>`
-            : "";
-          return `<li class="lw-card lw-reward${active ? "" : " lw-dim"}"><span class="lw-grow"><span class="lw-code">${esc(
-            c.code,
-          )}</span> ${badge}<span class="lw-muted lw-small lw-block-text">${esc(c.rewardName)}${
-            c.expiresAt && active ? ` · expires ${esc(c.expiresAt)}` : ""
-          }</span></span>${actions}</li>`;
-        })
-        .join("");
-      return `<div class="lw-block">${s.title ? `<div class="lw-title">${esc(s.title)}</div>` : ""}<ul class="lw-list lw-gap">${
-        list || `<li class="lw-muted lw-small">${esc(s.emptyText)}</li>`
-      }</ul></div>`;
-    }
+    case "coupons":
+      return ""; // discount codes are no longer issued (old version: unused-code/widget)
 
     case "history": {
       const rows = (state.history || [])

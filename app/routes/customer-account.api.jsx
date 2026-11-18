@@ -2,7 +2,7 @@ import { unauthenticated } from "../shopify.server";
 import { CORS, TokenError, json, verifySessionToken } from "../services/customeraccount.server";
 import { getStoreByShop } from "../services/store.server";
 import { buildStorefrontState, loadShopifyCustomer } from "../services/storefront.server";
-import { RedeemError, redeemReward } from "../services/redeem.server";
+import { RedeemError } from "../services/redeem.server";
 import { ReferralError, applyReferralCode } from "../services/referrals.server";
 
 // POST /customer-account/api  { action: "state" | "redeem" | "referral", … }
@@ -36,15 +36,8 @@ export const action = async ({ request }) => {
 
   try {
     if (body.action === "redeem") {
-      const r = await redeemReward({
-        store,
-        admin,
-        customerId: customer.id,
-        rewardId: String(body.rewardId || ""),
-        requestId: String(body.requestId || ""),
-        points: body.points,
-      });
-      return json({ ok: true, code: r.code });
+      // Points are spent in the Shiprocket checkout now. The code-making version is in unused-code/routes.
+      return json({ error: "Points are used at checkout." }, 410);
     }
     if (body.action === "referral") {
       await applyReferralCode({ store, customer, code: body.code });

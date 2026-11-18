@@ -30,6 +30,7 @@ function rangeLimit(reward, cartValue, step, unitValue) {
   const cart = Number(cartValue) || 0;
   const hit = ranges.find((r) => cart >= (Number(r.min) || 0) && (r.max == null || cart <= Number(r.max)));
   if (!hit) return 0;
+  if (hit.mode === "ALL") return Infinity;
   const limit = Number(hit.limit) || 0;
   if (hit.mode === "POINTS") return limit;
   return Math.floor((cart * Math.min(limit, 100)) / 100 / unitValue) * step;
@@ -52,10 +53,11 @@ export async function fetchLoyaltyPoints(store, { mobile_number, cart_value }) {
   const customer = await findCustomerByContact(store.id, { phone: mobile_number });
   const balance = customer?.pointsBalance || 0;
   const reward = customer ? await pickLoyaltyReward(store.id) : null;
+  const smallestBalance = store.settings?.minRedeemPoints || 0;
   return {
     mobile_number: String(mobile_number),
     available_points: balance,
-    applicable_points: customer ? applicablePoints(reward, balance, cart_value) : 0,
+    applicable_points: customer && balance >= smallestBalance ? applicablePoints(reward, balance, cart_value) : 0,
   };
 }
 

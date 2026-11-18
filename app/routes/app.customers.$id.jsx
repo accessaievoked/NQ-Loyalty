@@ -245,7 +245,7 @@ export default function CustomerDetail() {
     { key: "orders", label: "Recent orders" },
     { key: "referrals", label: "Referrals" },
     { key: "points", label: "Points history" },
-    { key: "codes", label: "Discount codes" },
+    ...(codes.length ? [{ key: "codes", label: "Old discount codes" }] : []),
   ];
 
   return (
