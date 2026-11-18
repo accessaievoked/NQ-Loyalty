@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Form, Link, useLoaderData, useNavigate } from "react-router";
 import { requireStore } from "../services/auth.server";
 import db from "../db.server";
@@ -73,11 +74,31 @@ const DARK_LINK = { color: "#111827", textDecoration: "none" };
 export default function Customers() {
   const { rows, q, sort, page, pages, total } = useLoaderData();
   const navigate = useNavigate();
-  const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), ...(sort !== "points_desc" ? { sort } : {}), page: String(p) })}`;
-  const search = (value) => {
-    const text = String(value || "").trim();
-    navigate(`/app/customers?${new URLSearchParams({ ...(text ? { q: text } : {}), ...(sort !== "points_desc" ? { sort } : {}) })}`);
+  const fieldRef = useRef(null);
+  const timer = useRef(null);
+  // Start from the current search once; after that the field belongs to the user. Re-sending `value`
+  // after each search would overwrite anything typed while the results were loading.
+  const startingQ = useRef(q).current;
+  const search = (text) => {
+    clearTimeout(timer.current);
+    const next = String(text ?? "").trim();
+    if (next === q) return;
+    navigate(`/app/customers?${new URLSearchParams({ ...(next ? { q: next } : {}), ...(sort !== "points_desc" ? { sort } : {}) })}`, { replace: true, preventScrollReset: true });
   };
+  // Search shortly after typing stops (0.6s), or at once on Enter.
+  const onType = (e) => {
+    clearTimeout(timer.current);
+    const text = e.currentTarget.value;
+    timer.current = setTimeout(() => search(text), 600);
+  };
+  const onKey = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      search(fieldRef.current?.value);
+    }
+  };
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), ...(sort !== "points_desc" ? { sort } : {}), page: String(p) })}`;
   const changeSort = (value) => navigate(`/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), sort: value })}`);
 
   return (
@@ -94,19 +115,7 @@ export default function Customers() {
             <input type="hidden" name="sort" value={sort} />
             <s-stack direction="inline" gap="small" alignItems="end">
               <div style={{ flex: 1, minWidth: 0 }}>
-                <s-search-field
-                  label="Search"
-                  labelAccessibilityVisibility="exclusive"
-                  name="q"
-                  value={q}
-                  placeholder="Search name or email"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      search(e.currentTarget.value);
-                    }
-                  }}
-                />
+                <s-search-field ref={fieldRef} label="Search" labelAccessibilityVisibility="exclusive" name="q" value={startingQ} placeholder="Search name or email" onInput={onType} onKeyDown={onKey} />
               </div>
               <s-button type="submit" icon="search" accessibilityLabel="Search" />
               <div style={{ width: 220, flex: "none" }}>
