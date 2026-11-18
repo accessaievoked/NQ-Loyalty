@@ -74,6 +74,10 @@ export default function Customers() {
   const { rows, q, sort, page, pages, total } = useLoaderData();
   const navigate = useNavigate();
   const link = (p) => `/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), ...(sort !== "points_desc" ? { sort } : {}), page: String(p) })}`;
+  const search = (value) => {
+    const text = String(value || "").trim();
+    navigate(`/app/customers?${new URLSearchParams({ ...(text ? { q: text } : {}), ...(sort !== "points_desc" ? { sort } : {}) })}`);
+  };
   const changeSort = (value) => navigate(`/app/customers?${new URLSearchParams({ ...(q ? { q } : {}), sort: value })}`);
 
   return (
@@ -90,7 +94,19 @@ export default function Customers() {
             <input type="hidden" name="sort" value={sort} />
             <s-stack direction="inline" gap="small" alignItems="end">
               <div style={{ flex: 1, minWidth: 0 }}>
-                <s-search-field label="Search" labelAccessibilityVisibility="exclusive" name="q" value={q} placeholder="Search name or email" />
+                <s-search-field
+                  label="Search"
+                  labelAccessibilityVisibility="exclusive"
+                  name="q"
+                  value={q}
+                  placeholder="Search name or email"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      search(e.currentTarget.value);
+                    }
+                  }}
+                />
               </div>
               <s-button type="submit" icon="search" accessibilityLabel="Search" />
               <div style={{ width: 220, flex: "none" }}>
