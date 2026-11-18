@@ -201,6 +201,9 @@ function renderBlock(block, state) {
     }
 
     case "redeem": {
+      if (state.fastCheckout) {
+        return `<div class="lw-block">${s.title ? `<div class="lw-title">${esc(s.title)}</div>` : ""}<div class="lw-card"><div class="lw-strong">Use your points at checkout</div><p class="lw-muted lw-small lw-tight">Enter your mobile number on the checkout page and choose how many points to use. The discount is applied automatically, with no code to copy.</p></div></div>`;
+      }
       const points = state.customer?.points ?? 0;
       const rows = (state.rewards || [])
         .map((r) => {
@@ -224,6 +227,7 @@ function renderBlock(block, state) {
     }
 
     case "coupons": {
+      if (state.fastCheckout && !(state.coupons || []).length) return "";
       const list = (state.coupons || [])
         // "Used" and "expired" codes stay visible as history, so a customer can always see what they claimed.
         .filter((c) => s.showUsed !== false || !c.status || c.status === "ACTIVE")

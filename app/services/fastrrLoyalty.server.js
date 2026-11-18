@@ -22,13 +22,26 @@ async function pickLoyaltyReward(storeId) {
   return prisma.reward.findFirst({ where: { storeId, type: "CUSTOM_AMOUNT", active: true }, orderBy: { createdAt: "asc" } });
 }
 
+// Cart-value limits (see Reward.cartRanges): if any are set, points can only be used on a cart that
+// falls in one of the ranges, up to that range's limit (a share of the cart, or a fixed number of points).
+function rangeLimit(reward, cartValue, step, unitValue) {
+  const ranges = Array.isArray(reward.cartRanges) ? reward.cartRanges : [];
+  if (!ranges.length) return Infinity;
+  const cart = Number(cartValue) || 0;
+  const hit = ranges.find((r) => cart >= (Number(r.min) || 0) && (r.max == null || cart <= Number(r.max)));
+  if (!hit) return 0;
+  const limit = Number(hit.limit) || 0;
+  if (hit.mode === "POINTS") return limit;
+  return Math.floor((cart * Math.min(limit, 100)) / 100 / unitValue) * step;
+}
+
 function applicablePoints(reward, balance, cartValue) {
   if (!reward) return 0;
   const step = reward.pointsCost;
   const unitValue = Number(reward.value) || 0;
   if (step <= 0 || unitValue <= 0) return 0;
   const byValue = unitValue > 0 ? Math.floor((Number(cartValue) || 0) / unitValue) * step : 0;
-  const cap = Math.min(balance, reward.maxPoints || Infinity, byValue);
+  const cap = Math.min(balance, reward.maxPoints || Infinity, byValue, rangeLimit(reward, cartValue, step, unitValue));
   const floored = Math.floor(cap / step) * step;
   const min = Math.max(step, reward.minPoints || 0);
   return floored >= min ? floored : 0;

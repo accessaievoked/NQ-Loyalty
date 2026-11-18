@@ -300,6 +300,9 @@ model Reward {
   // CUSTOM_AMOUNT only: smallest/largest spend per redemption (maxPoints null = no cap)
   minPoints      Int        @default(0)
   maxPoints      Int?
+  // CUSTOM_AMOUNT only: how much of a cart may be paid with points, by cart value. Used by Shiprocket
+  // checkout, which tells us the cart value. [{"min":1,"max":null,"mode":"PERCENT"|"POINTS","limit":50}, ...]
+  cartRanges     Json?
   minOrderAmount Decimal    @default(0) @db.Decimal(12, 2)
   // Days the generated discount code stays valid. 0 = no expiry.
   codeValidDays  Int        @default(30)

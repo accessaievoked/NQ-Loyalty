@@ -38,9 +38,11 @@ const cleanText = (v, max) => String(v ?? "").replace(/[\r\n]+/g, " ").trim().sl
 
 export async function saveFastCheckout(store, { heading, logoUrl, allowedIps, regenerateKey }) {
   let integration = await ensureIntegration(store.id, KIND);
-  const logo = cleanText(logoUrl, 500);
+  // Fields not sent (turning on, or making a new key) keep their saved values.
+  const prev = integration.config || {};
+  const logo = cleanText(logoUrl ?? prev.logoUrl, 500);
   if (logo && !/^https:\/\//i.test(logo)) throw new Error("The logo must be a full https:// image link");
-  const ips = cleanIps(allowedIps);
+  const ips = allowedIps == null ? prev.allowedIps || [] : cleanIps(allowedIps);
   // An IP list is only as good as the header it reads. Without a header our own proxy sets, the
   // caller could send any address, so refuse to turn the list on rather than pretend it protects.
   if (ips.length && !trustedIpHeader()) {
@@ -50,11 +52,32 @@ export async function saveFastCheckout(store, { heading, logoUrl, allowedIps, re
   }
   const data = {
     enabled: true,
-    config: { heading: cleanText(heading, 60) || "Use your points", logoUrl: logo, allowedIps: ips },
+    config: { heading: cleanText(heading ?? prev.heading, 60) || "Use your points", logoUrl: logo, allowedIps: ips },
   };
   if (regenerateKey) data.webhookToken = randomBytes(24).toString("base64url");
   integration = await prisma.integration.update({ where: { id: integration.id }, data });
   return integration;
+}
+
+/** The text file the merchant sends to Shiprocket: every URL plus the secret key. Built on the server
+ * and downloaded, so the key is never shown on screen or shipped in page data. */
+export function shiprocketSetupFile(store, integration) {
+  const root = String(process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
+  const base = `${root}/integrations/shiprocket/${store.id}`;
+  const key = integration.webhookToken || "";
+  return `Hi Shiprocket Checkout team,
+
+Please enable loyalty-points redemption on our checkout using our loyalty app.
+
+Loyalty Points Manager:
+  Fetch Loyalty Points (POST): ${base}/loyalty/points   body: {"mobile_number": "...", "cart_value": 1000.00}
+  Block Points (POST):         ${base}/loyalty/block    body: {"mobile_number": "...", "transactional_points": 50, "order_id": "..."}
+  Unblock Points (POST):       ${base}/loyalty/unblock  body: {"order_id": "..."}
+  Order webhook (POST, register this exact URL): ${base}/order-webhook?token=${key}
+Auth (points/block/unblock only): header  x-api-key: ${key}
+
+Keep this file private: the key lets anyone ask about customers' points.
+`;
 }
 
 export async function disableFastCheckout(storeId) {

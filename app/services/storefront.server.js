@@ -101,9 +101,11 @@ export async function loadShopifyCustomer(store, admin, shopifyCustomerId) {
 export async function buildStorefrontState({ store, customer, via }) {
   const settings = store.settings;
   const currency = store.currency;
-  const [rules, rewards] = await Promise.all([
+  const [rules, rewards, fastCheckout] = await Promise.all([
     prisma.earnRule.findMany({ where: { storeId: store.id, active: true }, orderBy: { createdAt: "asc" } }),
     prisma.reward.findMany({ where: { storeId: store.id, active: true }, orderBy: { pointsCost: "asc" } }),
+    // With Shiprocket checkout on, points are spent on that page, so the widget stops offering codes.
+    prisma.integration.findFirst({ where: { storeId: store.id, kind: "SHIPROCKET", enabled: true }, select: { id: true } }),
   ]);
 
   let coupons = [];
@@ -193,7 +195,8 @@ export async function buildStorefrontState({ store, customer, via }) {
         : null,
       referral,
       earn: earnLines(rules, settings, currency),
-      rewards: rewards.map((r) => ({
+      fastCheckout: !!fastCheckout,
+      rewards: (fastCheckout ? [] : rewards).map((r) => ({
         id: r.id,
         name: r.name,
         cost: r.pointsCost,

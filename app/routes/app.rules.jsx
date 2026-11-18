@@ -5,6 +5,7 @@ import { requireStore } from "../services/auth.server";
 import { connectJudgeMe, disconnect, getIntegration, syncJudgeMe } from "../services/integrations.server";
 import { disableFastCheckout, getFastCheckout, saveFastCheckout } from "../services/fastcheckout.server";
 import { clearStackRules, saveStackRules } from "../services/stacking.server";
+import { Prisma } from "@prisma/client";
 import db from "../db.server";
 
 // Earning and spending rules, and review points, on one page.
@@ -60,19 +61,12 @@ export const loader = async ({ request }) => {
       id: r.id, name: r.name, type: r.type, value: Number(r.value), pointsCost: r.pointsCost, minPoints: r.minPoints,
       maxPoints: r.maxPoints ?? 0, minOrderAmount: Number(r.minOrderAmount), codeValidDays: r.codeValidDays, active: r.active,
       redemptions: r._count.redemptions, noStackWith: r.noStackWith ?? [],
+      cartRanges: Array.isArray(r.cartRanges) ? r.cartRanges : [],
     })),
+    // The key and URLs are never sent to the page; they only leave via the downloaded setup file.
     fastCheckout: {
       enabled: !!fast?.enabled,
-      key: fast?.enabled ? fast.webhookToken : "",
-      base: `${(process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "")}/integrations/shiprocket/${store.id}`,
-      // Only meaningful when enabled: the Order webhook's secret travels in the URL, not a header.
-      orderWebhookUrl: fast?.enabled
-        ? `${(process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "")}/integrations/shiprocket/${store.id}/order-webhook?token=${fast.webhookToken}`
-        : "",
       hasLoyaltyReward: fast?.enabled ? !!(await db.reward.findFirst({ where: { storeId: store.id, type: "CUSTOM_AMOUNT", active: true } })) : true,
-      heading: fast?.config?.heading || "Use your points",
-      logoUrl: fast?.config?.logoUrl || "",
-      ips: (fast?.config?.allowedIps || []).join(", "),
       lastEvent: fast?.lastEventAt ? new Date(fast.lastEventAt).toISOString().slice(0, 16).replace("T", " ") + " UTC" : null,
     },
     judgeme: {
@@ -140,7 +134,7 @@ export const action = async ({ request }) => {
         if (!steps.length) return { error: "Add at least one order-number step with a bonus above 0" };
         data.milestones = steps.slice(0, MAX_MILESTONE_STEPS);
       } else {
-        data.milestones = null;
+        data.milestones = Prisma.DbNull;
       }
       // storeId in the filter keeps one shop from editing another shop's rule by guessing ids
       if (id) await db.earnRule.updateMany({ where: { id, storeId: store.id }, data });
@@ -175,6 +169,25 @@ export const action = async ({ request }) => {
         codeValidDays: Math.max(0, Math.min(3650, Math.floor(Number(f.get("codeValidDays")) || 0))),
         active: f.get("active") !== "off",
       };
+      // Cart-value limits (Customer picks points only): rows arrive as rangeMin:i / rangeMax:i / rangeMode:i / rangeLimit:i.
+      const ranges = [];
+      if (custom) {
+        for (const [k, v] of f.entries()) {
+          const m = /^rangeMin:(\d+)$/.exec(String(k));
+          if (!m) continue;
+          const row = m[1];
+          const min = Math.max(0, Number(v) || 0);
+          const maxRaw = String(f.get(`rangeMax:${row}`) ?? "").trim();
+          const max = maxRaw === "" ? null : Math.max(min, Number(maxRaw) || 0);
+          const mode = f.get(`rangeMode:${row}`) === "POINTS" ? "POINTS" : "PERCENT";
+          let limit = Math.max(0, Number(f.get(`rangeLimit:${row}`)) || 0);
+          if (mode === "PERCENT") limit = Math.min(100, limit);
+          else limit = Math.floor(limit);
+          if (limit > 0) ranges.push({ min, max, mode, limit });
+        }
+        ranges.sort((a, b) => a.min - b.min);
+      }
+      data.cartRanges = ranges.length ? ranges.slice(0, 20) : Prisma.DbNull;
       if (!data.name) return { error: "Give it a name" };
       if (id) await db.reward.updateMany({ where: { id, storeId: store.id }, data });
       else await db.reward.create({ data: { ...data, storeId: store.id } });
@@ -286,7 +299,7 @@ function ruleSummary(r, money) {
 
 function rewardSummary(r, money) {
   const min = r.minOrderAmount > 0 ? ` · orders over ${money(r.minOrderAmount)}` : "";
-  if (r.type === "CUSTOM_AMOUNT") return `Customer picks ${pts(r.minPoints || r.pointsCost)} to ${r.maxPoints ? pts(r.maxPoints) : "their whole balance"} · ${money(r.value)} per ${pts(r.pointsCost)}${min}`;
+  if (r.type === "CUSTOM_AMOUNT") return `Customer picks ${pts(r.minPoints || r.pointsCost)} to ${r.maxPoints ? pts(r.maxPoints) : "their whole balance"} · ${money(r.value)} per ${pts(r.pointsCost)}${min}${r.cartRanges?.length ? ` · limited by cart value (${r.cartRanges.length})` : ""}`;
   if (r.type === "FIXED_AMOUNT") return `${money(r.value)} off for ${pts(r.pointsCost)}${min}`;
   if (r.type === "PERCENTAGE") return `${r.value}% off for ${pts(r.pointsCost)}${min}`;
   return `Free shipping for ${pts(r.pointsCost)}${min}`;
@@ -324,7 +337,7 @@ function presets(currency) {
       { key: "ref-owner", title: "Referral: reward for the referrer", text: "Points when their friend completes a first order.", rule: { name: "Referral reward", type: "REFERRAL_REFERRER", value: 200, minOrderAmount: 0 } },
     ],
     redeem: [
-      { key: "any", title: "Spend any amount of points", text: "Customer chooses how many points to use, up to a maximum.", reward: { name: "Use points at checkout", type: "CUSTOM_AMOUNT", value: step, pointsCost: 100, minPoints: 100, maxPoints: 2000, minOrderAmount: 0, codeValidDays: 30 } },
+      { key: "any", title: "Spend any amount of points", text: "The customer chooses how many points to use. Works in Shiprocket checkout too, and can be limited by cart value.", reward: { name: "Use points at checkout", type: "CUSTOM_AMOUNT", value: step, pointsCost: 100, minPoints: 100, maxPoints: 2000, minOrderAmount: 0, codeValidDays: 30 } },
       { key: "fixed", title: "Fixed amount off", text: "A set discount for a set number of points.", reward: { name: `${off} off your order`, type: "FIXED_AMOUNT", value: off, pointsCost: Math.round((off / step) * 100), minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 30 } },
       { key: "percent", title: "Percentage off", text: "A percentage discount for a set number of points.", reward: { name: "10% off your order", type: "PERCENTAGE", value: 10, pointsCost: 1500, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 30 } },
       { key: "ship", title: "Free shipping", text: "Waive shipping for a set number of points.", reward: { name: "Free shipping", type: "FREE_SHIPPING", value: 0, pointsCost: 800, minPoints: 0, maxPoints: 0, minOrderAmount: 0, codeValidDays: 30 } },
@@ -473,31 +486,38 @@ function EmptyRow({ children }) {
   return <div style={{ padding: "18px 16px", borderTop: "1px solid #eceef1", fontSize: 13, color: "#6b7280" }}>{children}</div>;
 }
 
-// One line in a card: icon, name + plain-language summary, status, Edit. The editor opens beneath.
-function ListRow({ icon, title, summary, active, open, onToggle, children }) {
+// One line in a card: icon, name + plain-language summary, status, Edit (opens a modal).
+function ListRow({ icon, title, summary, active, onEdit }) {
   return (
-    <div style={{ borderTop: "1px solid #eceef1" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
-        <Glyph kind={icon} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{title}</div>
-          <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{summary}</div>
-        </div>
-        <s-badge tone={active ? "success" : "neutral"}>{active ? "Active" : "Inactive"}</s-badge>
-        <button type="button" onClick={onToggle} style={TEXT_BUTTON}>{open ? "Close" : "Edit"}</button>
+    <div style={{ borderTop: "1px solid #eceef1", display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+      <Glyph kind={icon} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{title}</div>
+        <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{summary}</div>
       </div>
-      {open && <div style={{ padding: "6px 16px 16px", background: "#fafafa", borderTop: "1px solid #eceef1" }}>{children}</div>}
+      <s-badge tone={active ? "success" : "neutral"}>{active ? "Active" : "Inactive"}</s-badge>
+      <button type="button" onClick={onEdit} style={TEXT_BUTTON}>Edit</button>
     </div>
   );
 }
 
-// "Add ..." picker. Lists only what this app can actually do, grouped, with a one-line explanation each.
-function PickerModal({ open, title, intro, groups, taken, busy, onPick, onClose }) {
+// Centred dialog. While it is open the page behind it can't scroll (the app lives in an iframe whose
+// own document scrolls, so both the root and the body are frozen) and Escape / clicking outside close it.
+function Modal({ open, title, intro, onClose, children, footer }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const html = document.documentElement;
+    const body = document.body;
+    const before = { html: html.style.overflow, body: body.style.overflow };
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      html.style.overflow = before.html;
+      body.style.overflow = before.body;
+    };
   }, [open, onClose]);
   if (!open) return null;
   return (
@@ -506,41 +526,91 @@ function PickerModal({ open, title, intro, groups, taken, busy, onPick, onClose 
       aria-modal="true"
       aria-label={title}
       onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(17,24,39,.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "6vh 16px 16px", overflowY: "auto" }}
+      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(17,24,39,.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 16px 16px", overflowY: "auto", overscrollBehavior: "contain" }}
     >
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(580px, 100%)", background: "#fff", borderRadius: 14, boxShadow: "0 20px 50px rgba(0,0,0,.25)", overflow: "hidden" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(620px, 100%)", background: "#fff", borderRadius: 14, boxShadow: "0 20px 50px rgba(0,0,0,.25)", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #e4e6ea" }}>
           <div style={{ fontSize: 16, fontWeight: 650, color: "#111827" }}>{title}</div>
           <button type="button" onClick={onClose} aria-label="Close" style={{ border: 0, background: "none", cursor: "pointer", fontSize: 22, lineHeight: 1, color: "#6b7280", padding: 4 }}>×</button>
         </div>
         {intro && <div style={{ padding: "12px 20px 0", fontSize: 13, color: "#6b7280", lineHeight: 1.5 }}>{intro}</div>}
-        <div style={{ maxHeight: "68vh", overflowY: "auto", padding: "4px 0 8px" }}>
-          {groups.map((g) => (
-            <div key={g.title}>
-              <div style={{ padding: "14px 20px 6px", fontSize: 12, fontWeight: 650, color: "#6b7280", textTransform: "uppercase", letterSpacing: ".04em" }}>{g.title}</div>
-              {g.items.map((it) => {
-                const done = taken(it);
-                return (
-                  <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", borderTop: "1px solid #f1f2f4" }}>
-                    <Glyph kind={it.icon} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{it.title}</div>
-                      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{it.text}</div>
-                    </div>
-                    <s-button disabled={done || busy || undefined} onClick={() => onPick(it)}>
-                      {done ? "Added" : "Add"}
-                    </s-button>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-        <div style={{ padding: "12px 20px", borderTop: "1px solid #e4e6ea", display: "flex", justifyContent: "flex-end" }}>
-          <s-button onClick={onClose}>Cancel</s-button>
-        </div>
+        <div style={{ maxHeight: "70vh", overflowY: "auto", overscrollBehavior: "contain" }}>{children}</div>
+        {footer && <div style={{ padding: "12px 20px", borderTop: "1px solid #e4e6ea" }}>{footer}</div>}
       </div>
     </div>
+  );
+}
+
+// "Add ..." picker. Lists only what this app can actually do, grouped, with a one-line explanation each.
+function PickerModal({ open, title, intro, groups, taken, busy, onPick, onClose }) {
+  return (
+    <Modal open={open} title={title} intro={intro} onClose={onClose} footer={<div style={{ display: "flex", justifyContent: "flex-end" }}><s-button onClick={onClose}>Cancel</s-button></div>}>
+      <div style={{ padding: "4px 0 8px" }}>
+        {groups.map((g) => (
+          <div key={g.title}>
+            <div style={{ padding: "14px 20px 6px", fontSize: 12, fontWeight: 650, color: "#6b7280", textTransform: "uppercase", letterSpacing: ".04em" }}>{g.title}</div>
+            {g.items.map((it) => {
+              const done = taken(it);
+              return (
+                <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 20px", borderTop: "1px solid #f1f2f4" }}>
+                  <Glyph kind={it.icon} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{it.title}</div>
+                    <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>{it.text}</div>
+                  </div>
+                  <s-button disabled={done || busy || undefined} onClick={() => onPick(it)}>
+                    {done ? "Added" : "Add"}
+                  </s-button>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+// Cart-value limits for a "Customer picks points" reward (used by Shiprocket checkout, which tells us
+// the cart value). Each range says how much of that cart may be paid with points.
+function RangesEditor({ ranges, onChange, currency }) {
+  const update = (i, patch) => onChange(ranges.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const remove = (i) => onChange(ranges.filter((_, idx) => idx !== i));
+  const add = () => {
+    const lastMax = ranges.length ? Number(ranges[ranges.length - 1].max) : 0;
+    onChange([...ranges, { min: Number.isFinite(lastMax) && lastMax > 0 ? lastMax + 1 : 1, max: "", mode: "PERCENT", limit: 50 }]);
+  };
+  return (
+    <s-stack gap="small">
+      <s-text type="strong">Limit points by cart value</s-text>
+      <s-text color="subdued">
+        Optional, for Shiprocket checkout. Choose how much of a cart can be paid with points. With no limits here, any cart can use points up to the
+        customer&apos;s balance. Once you add a limit, carts outside every range can&apos;t use points.
+      </s-text>
+      {ranges.map((r, i) => (
+        <div key={i} style={{ border: "1px solid #e4e6ea", borderRadius: 10, padding: 12, background: "#fff" }}>
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(150px, 1fr))" gap="small">
+            <s-number-field label={`Cart from (${currency})`} min="0" value={String(r.min)} onChange={(e) => update(i, { min: e.currentTarget.value })} />
+            <s-number-field label={`Cart up to (${currency})`} min="0" value={String(r.max ?? "")} details="Leave empty for no upper limit" onChange={(e) => update(i, { max: e.currentTarget.value })} />
+            <s-select label="Limit type" value={r.mode} onChange={(e) => update(i, { mode: e.currentTarget.value })}>
+              <s-option value="PERCENT">Percent of the cart</s-option>
+              <s-option value="POINTS">Fixed number of points</s-option>
+            </s-select>
+            <s-number-field label={r.mode === "POINTS" ? "Most points" : "Most percent of cart"} min="0" value={String(r.limit)} onChange={(e) => update(i, { limit: e.currentTarget.value })} />
+          </s-grid>
+          <input type="hidden" name={`rangeMin:${i}`} value={r.min} />
+          <input type="hidden" name={`rangeMax:${i}`} value={r.max ?? ""} />
+          <input type="hidden" name={`rangeMode:${i}`} value={r.mode} />
+          <input type="hidden" name={`rangeLimit:${i}`} value={r.limit} />
+          <div style={{ marginTop: 8 }}>
+            <s-button variant="tertiary" tone="critical" onClick={() => remove(i)}>Remove this range</s-button>
+          </div>
+        </div>
+      ))}
+      <div>
+        <s-button variant="tertiary" onClick={add}>Add a cart range</s-button>
+      </div>
+    </s-stack>
   );
 }
 
@@ -571,49 +641,54 @@ function RuleRow({ rule, currency, money }) {
   const hasMin = !["SIGNUP", "REVIEW", "ORDER_MILESTONE"].includes(rule.type);
 
   return (
-    <ListRow icon={RULE_ICON[rule.type]} title={rule.name} summary={ruleSummary(rule, money)} active={rule.active} open={open} onToggle={() => setOpen((v) => !v)}>
-      <fetcher.Form method="post">
-        <input type="hidden" name="intent" value="rule-save" />
-        <input type="hidden" name="id" value={rule.id} />
-        <input type="hidden" name="type" value={rule.type} />
-        <input type="hidden" name="active" value={active ? "on" : "off"} />
-        <s-stack gap="base">
-          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
-            <s-text-field label="Name (shown to customers)" name="name" value={rule.name} />
-            {!isMilestone && <s-number-field label={valueLabel} name="value" min="1" step="1" value={String(rule.value)} />}
-            {isPerCurrency && (
-              <s-number-field
-                label="Most points per order"
-                name="maxPoints"
-                min="0"
-                step="1"
-                value={String(rule.maxPoints || 0)}
-                details="0 = no limit. Example: 1 point per ₹10, up to 100 points."
-              />
-            )}
-            {hasMin && (
-              <s-number-field
-                label={`Smallest order that counts (${currency})`}
-                name="minOrderAmount"
-                min="0"
-                value={String(rule.minOrderAmount)}
-                details="0 = every order counts."
-              />
-            )}
-          </s-grid>
-          {isMilestone && <MilestoneEditor steps={milestones} onChange={setMilestones} currency={currency} />}
-          <s-checkbox label="This rule is on" checked={active} onChange={(e) => setActive(e.currentTarget.checked)} />
-          <s-stack direction="inline" justifyContent="space-between">
-            <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this rule? Points already earned are not affected.") && fetcher.submit({ intent: "rule-delete", id: rule.id }, { method: "post" })}>
-              Remove
-            </s-button>
-            <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
-              Save
-            </s-button>
-          </s-stack>
-        </s-stack>
-      </fetcher.Form>
-    </ListRow>
+    <>
+      <ListRow icon={RULE_ICON[rule.type]} title={rule.name} summary={ruleSummary(rule, money)} active={rule.active} onEdit={() => setOpen(true)} />
+      <Modal open={open} title={`Edit: ${rule.name}`} onClose={() => setOpen(false)}>
+        <fetcher.Form method="post">
+          <input type="hidden" name="intent" value="rule-save" />
+          <input type="hidden" name="id" value={rule.id} />
+          <input type="hidden" name="type" value={rule.type} />
+          <input type="hidden" name="active" value={active ? "on" : "off"} />
+          <div style={{ padding: 20 }}>
+            <s-stack gap="base">
+              <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
+                <s-text-field label="Name (shown to customers)" name="name" value={rule.name} />
+                {!isMilestone && <s-number-field label={valueLabel} name="value" min="1" step="1" value={String(rule.value)} />}
+                {isPerCurrency && (
+                  <s-number-field
+                    label="Most points per order"
+                    name="maxPoints"
+                    min="0"
+                    step="1"
+                    value={String(rule.maxPoints || 0)}
+                    details="0 = no limit. Example: 1 point per ₹10, up to 100 points."
+                  />
+                )}
+                {hasMin && (
+                  <s-number-field
+                    label={`Smallest order that counts (${currency})`}
+                    name="minOrderAmount"
+                    min="0"
+                    value={String(rule.minOrderAmount)}
+                    details="0 = every order counts."
+                  />
+                )}
+              </s-grid>
+              {isMilestone && <MilestoneEditor steps={milestones} onChange={setMilestones} currency={currency} />}
+              <s-checkbox label="This rule is on" checked={active} onChange={(e) => setActive(e.currentTarget.checked)} />
+              <s-stack direction="inline" justifyContent="space-between">
+                <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this rule? Points already earned are not affected.") && fetcher.submit({ intent: "rule-delete", id: rule.id }, { method: "post" })}>
+                  Remove
+                </s-button>
+                <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
+                  Save
+                </s-button>
+              </s-stack>
+            </s-stack>
+          </div>
+        </fetcher.Form>
+      </Modal>
+    </>
   );
 }
 
@@ -622,6 +697,7 @@ function RewardRow({ reward, currency, money }) {
   const [open, setOpen] = useState(false);
   const [type, setType] = useState(reward.type);
   const [active, setActive] = useState(reward.active);
+  const [ranges, setRanges] = useState(() => reward.cartRanges || []);
   useToast(fetcher);
   useEffect(() => {
     if (fetcher.state === "idle" && (fetcher.data?.ok === "Saved" || fetcher.data?.ok === "Removed")) setOpen(false);
@@ -630,67 +706,71 @@ function RewardRow({ reward, currency, money }) {
   const custom = type === "CUSTOM_AMOUNT";
 
   return (
-    <ListRow
-      icon={REWARD_ICON[reward.type]}
-      title={reward.name}
-      summary={`${rewardSummary(reward, money)} · ${reward.redemptions} redeemed`}
-      active={reward.active}
-      open={open}
-      onToggle={() => setOpen((v) => !v)}
-    >
-      <fetcher.Form method="post">
-        <input type="hidden" name="intent" value="reward-save" />
-        <input type="hidden" name="id" value={reward.id} />
-        <input type="hidden" name="active" value={active ? "on" : "off"} />
-        <s-stack gap="base">
-          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
-            <s-text-field label="Name (shown to customers)" name="name" value={reward.name} />
-            <s-select label="Type" name="type" value={type} onChange={(e) => setType(e.currentTarget.value)}>
-              {Object.entries(REWARD_TYPES).map(([k, v]) => (
-                <s-option key={k} value={k}>{v}</s-option>
-              ))}
-            </s-select>
-            {type !== "FREE_SHIPPING" && (
-              <s-number-field
-                label={custom ? `Worth (${currency}) per step` : type === "PERCENTAGE" ? "Percent off" : `Amount off (${currency})`}
-                name="value"
-                min="0"
-                step="any"
-                value={String(reward.value)}
-              />
-            )}
-            <s-number-field
-              label={custom ? "Points per step" : "Points it costs"}
-              name="pointsCost"
-              min="1"
-              step="1"
-              value={String(reward.pointsCost)}
-              details={custom ? "Example: 100 points = the amount on the left." : undefined}
-            />
-            {custom && (
-              <>
-                <s-number-field label="Fewest points to spend" name="minPoints" min="0" step="1" value={String(reward.minPoints)} />
-                <s-number-field label="Most points to spend" name="maxPoints" min="0" step="1" value={String(reward.maxPoints)} details="0 = no limit." />
-              </>
-            )}
-            <s-number-field label={`Smallest order (${currency})`} name="minOrderAmount" min="0" value={String(reward.minOrderAmount)} details="0 = any order." />
-            <s-number-field label="Code works for (days)" name="codeValidDays" min="0" step="1" value={String(reward.codeValidDays)} details="0 = never runs out." />
-          </s-grid>
-          <s-checkbox label="This reward is on" checked={active} onChange={(e) => setActive(e.currentTarget.checked)} />
-          <s-stack direction="inline" justifyContent="space-between">
-            <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this reward? Past redemptions stay in the history.") && fetcher.submit({ intent: "reward-delete", id: reward.id }, { method: "post" })}>
-              Remove
-            </s-button>
-            <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
-              Save
-            </s-button>
-          </s-stack>
-        </s-stack>
-      </fetcher.Form>
-    </ListRow>
+    <>
+      <ListRow
+        icon={REWARD_ICON[reward.type]}
+        title={reward.name}
+        summary={`${rewardSummary(reward, money)} · ${reward.redemptions} redeemed`}
+        active={reward.active}
+        onEdit={() => setOpen(true)}
+      />
+      <Modal open={open} title={`Edit: ${reward.name}`} onClose={() => setOpen(false)}>
+        <fetcher.Form method="post">
+          <input type="hidden" name="intent" value="reward-save" />
+          <input type="hidden" name="id" value={reward.id} />
+          <input type="hidden" name="active" value={active ? "on" : "off"} />
+          <div style={{ padding: 20 }}>
+            <s-stack gap="base">
+              <s-grid gridTemplateColumns="repeat(auto-fit, minmax(190px, 1fr))" gap="base">
+                <s-text-field label="Name (shown to customers)" name="name" value={reward.name} />
+                <s-select label="Type" name="type" value={type} onChange={(e) => setType(e.currentTarget.value)}>
+                  {Object.entries(REWARD_TYPES).map(([k, v]) => (
+                    <s-option key={k} value={k}>{v}</s-option>
+                  ))}
+                </s-select>
+                {type !== "FREE_SHIPPING" && (
+                  <s-number-field
+                    label={custom ? `Worth (${currency}) per step` : type === "PERCENTAGE" ? "Percent off" : `Amount off (${currency})`}
+                    name="value"
+                    min="0"
+                    step="any"
+                    value={String(reward.value)}
+                  />
+                )}
+                <s-number-field
+                  label={custom ? "Points per step" : "Points it costs"}
+                  name="pointsCost"
+                  min="1"
+                  step="1"
+                  value={String(reward.pointsCost)}
+                  details={custom ? "Example: 100 points = the amount on the left." : undefined}
+                />
+                {custom && (
+                  <>
+                    <s-number-field label="Fewest points to spend" name="minPoints" min="0" step="1" value={String(reward.minPoints)} />
+                    <s-number-field label="Most points to spend" name="maxPoints" min="0" step="1" value={String(reward.maxPoints)} details="0 = no limit." />
+                  </>
+                )}
+                <s-number-field label={`Smallest order (${currency})`} name="minOrderAmount" min="0" value={String(reward.minOrderAmount)} details="0 = any order." />
+                <s-number-field label="Code works for (days)" name="codeValidDays" min="0" step="1" value={String(reward.codeValidDays)} details="0 = never runs out." />
+              </s-grid>
+              {custom && <RangesEditor ranges={ranges} onChange={setRanges} currency={currency} />}
+              <s-checkbox label="This reward is on" checked={active} onChange={(e) => setActive(e.currentTarget.checked)} />
+              <s-stack direction="inline" justifyContent="space-between">
+                <s-button tone="critical" variant="tertiary" onClick={() => window.confirm("Remove this reward? Past redemptions stay in the history.") && fetcher.submit({ intent: "reward-delete", id: reward.id }, { method: "post" })}>
+                  Remove
+                </s-button>
+                <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
+                  Save
+                </s-button>
+              </s-stack>
+            </s-stack>
+          </div>
+        </fetcher.Form>
+      </Modal>
+    </>
   );
 }
-
 
 // Which reward codes a customer may hold at the same time. Ticked = can be used together.
 function StackGrid({ rewards }) {
@@ -781,86 +861,77 @@ function StackGrid({ rewards }) {
   );
 }
 
+// Shiprocket Checkout (fastrr): just on/off here. The secret key is never shown on screen; the merchant
+// downloads a setup file to send to Shiprocket, or makes a new key (which invalidates the old file).
 function FastCheckout({ fc }) {
   const fetcher = useFetcher();
+  const shopify = useAppBridge();
+  const [downloading, setDownloading] = useState(false);
   useToast(fetcher);
   const busy = fetcher.state !== "idle" || undefined;
-  const send = (intent) => fetcher.submit({ intent, heading: fc.heading, logoUrl: fc.logoUrl, allowedIps: fc.ips }, { method: "post" });
-  const brief = `Hi Shiprocket Checkout team,
+  const send = (intent) => fetcher.submit({ intent }, { method: "post" });
 
-Please enable loyalty-points redemption on our checkout using our loyalty app's API.
+  const download = async () => {
+    setDownloading(true);
+    try {
+      const res = await fetch("/app/shiprocket-file");
+      if (!res.ok) throw new Error("download failed");
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "shiprocket-checkout-setup.txt";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      shopify.toast.show("Setup file downloaded. Send it to Shiprocket.");
+    } catch {
+      shopify.toast.show("Couldn't download the file. Please try again.", { isError: true });
+    } finally {
+      setDownloading(false);
+    }
+  };
 
-Loyalty Points Manager (your spec):
-  Fetch Loyalty Points (POST): ${fc.base}/loyalty/points   body: {"mobile_number": "...", "cart_value": 1000.00}
-  Block Points (POST):         ${fc.base}/loyalty/block    body: {"mobile_number": "...", "transactional_points": 50, "order_id": "..."}
-  Unblock Points (POST):       ${fc.base}/loyalty/unblock  body: {"order_id": "..."}
-  Order webhook (POST, register this exact URL): ${fc.orderWebhookUrl}
-Auth (points/block/unblock only): header  x-api-key: ${fc.key || "<secret key>"}
-
-Our own lookup/redeem (kept for custom-checkout widgets that use a Shopify discount code instead):
-  Lookup (POST): ${fc.base}/lookup   body: {"phone": "<verified phone>", "email": "<optional>"}
-  Redeem (POST): ${fc.base}/redeem   body: {"phone": "...", "rewardId": "<offer id>", "points": <only for custom amounts>, "requestId": "<unique per attempt>"}
-  Auth: header  x-api-key: ${fc.key || "<secret key>"}`;
   return (
     <s-stack gap="base">
       <s-stack direction="inline" gap="small" alignItems="center">
         <s-badge tone={fc.enabled ? "success" : "neutral"}>{fc.enabled ? "On" : "Off"}</s-badge>
-        {fc.enabled && fc.lastEvent && <s-text color="subdued">Last request {fc.lastEvent}</s-text>}
+        {fc.enabled && fc.lastEvent && <s-text color="subdued">Last request from Shiprocket {fc.lastEvent}</s-text>}
       </s-stack>
-      <s-paragraph>
-        Fast-checkout apps like Shiprocket Checkout (fastrr) replace the Shopify checkout page, so the widget and a pasted code can&apos;t run there.
-        Their own API spec ("Loyalty Points Manager") calls us by mobile number as their checkout runs: it fetches the balance, blocks the points the
-        shopper chose to use against their own order id, and tells us by webhook whether that order succeeded. Turn this on, then send the details
-        below to Shiprocket&apos;s checkout support, who enable it on their side.
-      </s-paragraph>
-      {fc.enabled && !fc.hasLoyaltyReward && (
-        <s-banner tone="warning">
-          Add a &quot;Customer picks points&quot; reward below (Ways to spend points) so Shiprocket knows the points→currency rate. Without one, Fetch/Block Points
-          will report 0 applicable points.
-        </s-banner>
-      )}
-      <fetcher.Form method="post">
-        <input type="hidden" name="intent" value="fast-save" />
-        <s-stack gap="base">
-          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(220px, 1fr))" gap="base">
-            <s-text-field label="Heading shown at checkout" name="heading" value={fc.heading} details="For example “Use your Claura points”" />
-            <s-text-field label="Logo link (https)" name="logoUrl" value={fc.logoUrl} placeholder="https://…/logo.png" />
-          </s-grid>
-          <s-text-field
-            label="Only accept requests from these IP addresses (optional)"
-            name="allowedIps"
-            value={fc.ips}
-            details="Comma separated. Leave empty to rely on the secret key alone. To use it, your server needs the TRUSTED_IP_HEADER setting (the header your host sets with the real caller address: fly-client-ip on Fly, cf-connecting-ip behind Cloudflare); without it we refuse to save a list."
-          />
-          <s-stack direction="inline" gap="small">
-            <s-button type="submit" variant="primary" loading={busy}>{fc.enabled ? "Save" : "Turn on"}</s-button>
-            {fc.enabled && (
-              <>
-                <s-button onClick={() => send("fast-rotate")} loading={busy}>Make a new key</s-button>
-                <s-button tone="critical" variant="tertiary" onClick={() => send("fast-off")}>Turn off</s-button>
-              </>
-            )}
+      {!fc.enabled ? (
+        <>
+          <s-paragraph>
+            Turn this on if you use Shiprocket Checkout. Customers can then spend points on that page with no code to copy. Nothing changes for stores
+            that use Shopify&apos;s own checkout.
+          </s-paragraph>
+          <s-stack direction="inline">
+            <s-button variant="primary" onClick={() => send("fast-save")} loading={busy}>Turn on</s-button>
           </s-stack>
-        </s-stack>
-      </fetcher.Form>
-
-      {fc.enabled && (
-        <s-stack gap="small">
-          <s-heading>Send this to Shiprocket</s-heading>
-          <s-text-field label="Secret key (keep private)" value={fc.key} readOnly />
-          <s-text-field label="Fetch Loyalty Points URL" value={`${fc.base}/loyalty/points`} readOnly />
-          <s-text-field label="Block Points URL" value={`${fc.base}/loyalty/block`} readOnly />
-          <s-text-field label="Unblock Points URL" value={`${fc.base}/loyalty/unblock`} readOnly />
-          <s-text-field label="Order webhook URL (register exactly this, token included)" value={fc.orderWebhookUrl} readOnly />
-          <s-text-field label="Lookup URL (custom-checkout widgets only)" value={`${fc.base}/lookup`} readOnly />
-          <s-text-field label="Redeem URL (custom-checkout widgets only)" value={`${fc.base}/redeem`} readOnly />
-          <s-text-area label="Ready-to-send message" value={brief} rows={9} readOnly />
-        </s-stack>
+        </>
+      ) : (
+        <>
+          <s-paragraph>
+            Download the setup file and send it to Shiprocket&apos;s checkout support. They switch it on at their end. Keep the file private: it holds the
+            secret key.
+          </s-paragraph>
+          {!fc.hasLoyaltyReward && (
+            <s-banner tone="warning">
+              Add a &quot;Customer picks points&quot; reward under Ways to spend points, so Shiprocket knows how many points equal how much money. Until you do,
+              customers can&apos;t spend points there.
+            </s-banner>
+          )}
+          <s-stack direction="inline" gap="small">
+            <s-button variant="primary" onClick={download} loading={downloading || undefined}>Download setup file</s-button>
+            <s-button
+              onClick={() => window.confirm("Make a new key? The old key and file stop working, so send Shiprocket the new file.") && send("fast-rotate")}
+              loading={busy}
+            >
+              Make a new key
+            </s-button>
+            <s-button tone="critical" variant="tertiary" onClick={() => send("fast-off")}>Turn off</s-button>
+          </s-stack>
+        </>
       )}
-      <s-text color="subdued">
-        Codes made this way are single-use, can&apos;t be guessed, and aren&apos;t tied to a Shopify login, because the fast checkout creates the order itself.
-        Every redemption appears in the customer&apos;s history like any other.
-      </s-text>
     </s-stack>
   );
 }
@@ -1019,20 +1090,13 @@ export default function Rules() {
         </SectionRow>
 
         <SectionRow
-          title="Shiprocket fast checkout"
-          text="Optional. Only needed if you use Shiprocket Checkout instead of Shopify's own checkout, so customers can still spend points there."
+          title="Shiprocket checkout"
+          text="Optional. Only for stores that use Shiprocket Checkout instead of Shopify's own checkout, so customers can still spend points there."
         >
           <Card>
-            {/* Collapsed by default: it holds a secret key and is only needed by Shiprocket Checkout stores. */}
-            <details>
-              <summary style={{ cursor: "pointer", padding: "14px 16px", fontSize: 14, fontWeight: 600, color: "#111827", listStyle: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>Shiprocket settings{fastCheckout.enabled ? " (on)" : " (off)"}</span>
-                <span style={{ fontSize: 13, fontWeight: 400, color: "#6b7280" }}>Click to show or hide</span>
-              </summary>
-              <div style={{ padding: 16, borderTop: "1px solid #eceef1" }}>
-                <FastCheckout fc={fastCheckout} />
-              </div>
-            </details>
+            <div style={{ padding: 16 }}>
+              <FastCheckout fc={fastCheckout} />
+            </div>
           </Card>
         </SectionRow>
 
