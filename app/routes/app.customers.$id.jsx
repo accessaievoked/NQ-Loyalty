@@ -127,31 +127,81 @@ export const action = async ({ request, params }) => {
   return { ok: "Balance updated" };
 };
 
-function CopyField({ label, value }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
+// A single card holding several stat columns side by side, divided by a hairline instead of each
+// stat getting its own box — one card, not a wall of boxes.
+function StatRow({ items }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", border: "1px solid #e4e6ea", borderRadius: 10, overflow: "hidden" }}>
+      {items.map((it, i) => (
+        <div
+          key={it.label}
+          style={{ flex: "1 1 140px", padding: "12px 16px", borderLeft: i ? "1px solid #e4e6ea" : 0, borderTop: "1px solid #e4e6ea", marginTop: i ? 0 : 0 }}
+        >
+          <div style={{ fontSize: 12, color: "#6b7280" }}>{it.label}</div>
+          <div style={{ fontSize: 16, fontWeight: 650, color: "#111827", marginTop: 2 }}>{it.value}</div>
+          {it.sub && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 1 }}>{it.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A card of label/value rows, each with an optional copy button — used for contact-style details.
+function InfoCard({ items }) {
+  const [copiedKey, setCopiedKey] = useState("");
+  const copy = async (key, value) => {
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(""), 1500);
     } catch {
       // Clipboard access denied (e.g. no HTTPS context); nothing to fall back to here.
     }
   };
   return (
-    <s-box padding="base" border="base" borderRadius="base" background="subdued">
-      <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="small">
-        <s-stack gap="small-300">
-          <s-text color="subdued">{label}</s-text>
-          <s-text type="strong">{value || "Not set"}</s-text>
-        </s-stack>
-        {value && (
-          <s-button variant="tertiary" onClick={copy}>
-            {copied ? "Copied" : "Copy"}
-          </s-button>
-        )}
-      </s-stack>
-    </s-box>
+    <div style={{ border: "1px solid #e4e6ea", borderRadius: 10, overflow: "hidden" }}>
+      {items.map((it, i) => (
+        <div
+          key={it.label}
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "10px 14px", borderTop: i ? "1px solid #eceef1" : 0 }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>{it.label}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.value || "Not set"}</div>
+          </div>
+          {it.value && (
+            <button
+              type="button"
+              onClick={() => copy(it.label, it.value)}
+              style={{ flex: "none", border: "1px solid #d1d5db", background: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, color: "#111827", cursor: "pointer" }}
+            >
+              {copiedKey === it.label ? "Copied" : "Copy"}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TabBar({ tabs, active, onChange }) {
+  return (
+    <div style={{ display: "flex", gap: 20, borderBottom: "1px solid #e4e6ea", marginBottom: 14 }}>
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          onClick={() => onChange(t.key)}
+          style={{
+            border: 0, background: "none", cursor: "pointer", padding: "0 0 10px", fontSize: 14,
+            fontWeight: active === t.key ? 650 : 500, color: active === t.key ? "#111827" : "#6b7280",
+            borderBottom: active === t.key ? "2px solid #111827" : "2px solid transparent",
+          }}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -181,229 +231,225 @@ export default function CustomerDetail() {
   // submit is deduped by the ledger but a deliberate second adjustment is not.
   const [requestId, setRequestId] = useState("");
   useEffect(() => setRequestId(crypto.randomUUID()), [fetcher.data]);
+  const [tab, setTab] = useState("orders");
 
   useEffect(() => {
     if (fetcher.data?.ok) shopify.toast.show(fetcher.data.ok);
     if (fetcher.data?.error) shopify.toast.show(fetcher.data.error, { isError: true });
   }, [fetcher.data, shopify]);
 
+  const TABS = [
+    { key: "orders", label: "Recent orders" },
+    { key: "referrals", label: "Referrals" },
+    { key: "points", label: "Points history" },
+    { key: "codes", label: "Discount codes" },
+  ];
+
   return (
     <s-page heading={customer.name}>
-      <s-section heading="Overview">
-        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base">
-          <s-box padding="base" border="base" borderRadius="base" background="subdued">
-            <s-text color="subdued">Total orders</s-text>
-            <s-heading>{stats.totalOrders}</s-heading>
-          </s-box>
-          <s-box padding="base" border="base" borderRadius="base" background="subdued">
-            <s-text color="subdued">Average order value</s-text>
-            <s-heading>{storeMoney(stats.avgOrderValue)}</s-heading>
-          </s-box>
-          <s-box padding="base" border="base" borderRadius="base" background="subdued">
-            <s-text color="subdued">Amount spent</s-text>
-            <s-heading>{storeMoney(stats.amountSpent)}</s-heading>
-          </s-box>
-          <s-box padding="base" border="base" borderRadius="base" background="subdued">
-            <s-text color="subdued">Customer since</s-text>
-            <s-heading>{customer.joinedAt}</s-heading>
-          </s-box>
-        </s-grid>
+      <s-section>
+        <StatRow
+          items={[
+            { label: "Total orders", value: stats.totalOrders },
+            { label: "Average order value", value: storeMoney(stats.avgOrderValue) },
+            { label: "Amount spent", value: storeMoney(stats.amountSpent) },
+            { label: "Customer since", value: customer.joinedAt },
+          ]}
+        />
       </s-section>
 
-      <s-section heading="Profile">
-        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(220px, 1fr))" gap="base">
-          <CopyField label="Email" value={customer.email} />
-          <CopyField label="Phone" value={customer.phone} />
-          <CopyField label="Shopify customer ID" value={customer.shopifyId} />
-          <CopyField label="Referral code" value={customer.referralCode} />
-        </s-grid>
-      </s-section>
+      <s-section>
+        <style>{"@media (min-width:860px){.cust-detail-grid{grid-template-columns:minmax(0,2fr) minmax(260px,1fr) !important}}"}</style>
+        <div className="cust-detail-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 20, alignItems: "start" }}>
+          <div style={{ minWidth: 0 }}>
+            <TabBar tabs={TABS} active={tab} onChange={setTab} />
 
-      <s-section heading="Points">
-        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base">
-          <s-box padding="base" border="base" borderRadius="base" background="subdued">
-            <s-text color="subdued">Current balance</s-text>
-            <s-heading>{customer.balance}</s-heading>
-          </s-box>
-          <s-box padding="base" border="base" borderRadius="base" background="subdued">
-            <s-text color="subdued">Lifetime earned</s-text>
-            <s-heading>{customer.lifetime}</s-heading>
-          </s-box>
-        </s-grid>
-        <s-box paddingBlockStart="base">
-          <fetcher.Form method="post">
-            <input type="hidden" name="requestId" value={requestId} />
-            <s-stack gap="base">
-              <s-grid gridTemplateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap="base">
-                <s-number-field label="Adjust points (use a minus to remove)" name="points" step="1" value="0" />
-                <s-text-field label="Reason" name="note" placeholder="e.g. Goodwill credit" />
-              </s-grid>
-              <s-stack direction="inline" justifyContent="end">
-                <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
-                  Apply
-                </s-button>
+            {tab === "orders" && (
+              orders.length === 0 ? (
+                <s-paragraph>No orders yet.</s-paragraph>
+              ) : (
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header>Order</s-table-header>
+                    <s-table-header format="numeric">Order total</s-table-header>
+                    <s-table-header format="numeric">Earned points</s-table-header>
+                    <s-table-header>Payment</s-table-header>
+                    <s-table-header>Date</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {orders.map((o) => (
+                      <s-table-row key={o.id}>
+                        <s-table-cell>{o.name}</s-table-cell>
+                        <s-table-cell>{storeMoney(o.total)}</s-table-cell>
+                        <s-table-cell>
+                          {o.points}
+                          {o.pending ? " (pending)" : ""}
+                        </s-table-cell>
+                        <s-table-cell>
+                          <s-badge tone={ORDER_STATUS_TONE[o.status] ?? "neutral"}>{o.status}</s-badge>
+                        </s-table-cell>
+                        <s-table-cell>{o.date}</s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
+              )
+            )}
+
+            {tab === "referrals" && (
+              <s-stack gap="base">
+                {referrals.referredBy && (
+                  <s-text>
+                    Referred by <Link to={`/app/customers/${referrals.referredBy.id}`} style={DARK_LINK}>{referrals.referredBy.name}</Link>{" "}
+                    <s-badge tone={statusTone[referrals.referredBy.status] ?? "neutral"}>{referrals.referredBy.status.toLowerCase()}</s-badge>
+                  </s-text>
+                )}
+
+                <StatRow
+                  items={[
+                    { label: "Customers referred", value: referrals.totals.referred, sub: `${referrals.totals.rewarded} rewarded` },
+                    { label: "Revenue from them", value: money(referrals.totals.revenue), sub: `${referrals.totals.orders} orders` },
+                    { label: "Points earned from referrals", value: referrals.totals.pointsEarned },
+                  ]}
+                />
+
+                {referrals.friends.length === 0 ? (
+                  <s-paragraph>This customer hasn't referred anyone yet.</s-paragraph>
+                ) : (
+                  <s-table>
+                    <s-table-header-row>
+                      <s-table-header>Customer</s-table-header>
+                      <s-table-header>Status</s-table-header>
+                      <s-table-header>Joined</s-table-header>
+                      <s-table-header format="numeric">Orders</s-table-header>
+                      <s-table-header format="numeric">Revenue</s-table-header>
+                      <s-table-header format="numeric">Points earned</s-table-header>
+                    </s-table-header-row>
+                    <s-table-body>
+                      {referrals.friends.map((f) => (
+                        <s-table-row key={f.id}>
+                          <s-table-cell>
+                            <Link to={`/app/customers/${f.id}`} style={DARK_LINK}>{f.name}</Link>
+                          </s-table-cell>
+                          <s-table-cell>
+                            <s-badge tone={statusTone[f.status] ?? "neutral"}>{f.status.toLowerCase()}</s-badge>
+                          </s-table-cell>
+                          <s-table-cell>{f.joined}</s-table-cell>
+                          <s-table-cell>{f.orders}</s-table-cell>
+                          <s-table-cell>{money(f.revenue)}</s-table-cell>
+                          <s-table-cell>{f.pointsEarned}</s-table-cell>
+                        </s-table-row>
+                      ))}
+                    </s-table-body>
+                  </s-table>
+                )}
+                <s-text color="subdued">
+                  Revenue is the value of their orders after discounts (no shipping or tax), minus refunds, excluding cancelled and returned orders.
+                  {referrals.converted ? ` Shown in ${referrals.currency}, converted from ${referrals.from}.` : ` Shown in ${referrals.currency}.`}
+                </s-text>
               </s-stack>
-            </s-stack>
-          </fetcher.Form>
-        </s-box>
-      </s-section>
+            )}
 
-      <s-section heading="Recent orders">
-        {orders.length === 0 ? (
-          <s-paragraph>No orders yet.</s-paragraph>
-        ) : (
-          <s-table>
-            <s-table-header-row>
-              <s-table-header>Order</s-table-header>
-              <s-table-header format="numeric">Order total</s-table-header>
-              <s-table-header format="numeric">Earned points</s-table-header>
-              <s-table-header>Payment</s-table-header>
-              <s-table-header>Date</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {orders.map((o) => (
-                <s-table-row key={o.id}>
-                  <s-table-cell>{o.name}</s-table-cell>
-                  <s-table-cell>{storeMoney(o.total)}</s-table-cell>
-                  <s-table-cell>
-                    {o.points}
-                    {o.pending ? " (pending)" : ""}
-                  </s-table-cell>
-                  <s-table-cell>
-                    <s-badge tone={ORDER_STATUS_TONE[o.status] ?? "neutral"}>{o.status}</s-badge>
-                  </s-table-cell>
-                  <s-table-cell>{o.date}</s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        )}
-      </s-section>
+            {tab === "points" && (
+              ledger.length === 0 ? (
+                <s-paragraph>No activity yet.</s-paragraph>
+              ) : (
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header>When</s-table-header>
+                    <s-table-header>Type</s-table-header>
+                    <s-table-header>Note</s-table-header>
+                    <s-table-header format="numeric">Points</s-table-header>
+                    <s-table-header format="numeric">Balance</s-table-header>
+                    <s-table-header>Expires</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {ledger.map((t) => (
+                      <s-table-row key={t.id}>
+                        <s-table-cell>{t.at}</s-table-cell>
+                        <s-table-cell>{t.type.toLowerCase()}</s-table-cell>
+                        <s-table-cell>{t.note}</s-table-cell>
+                        <s-table-cell>
+                          {t.points > 0 ? "+" : ""}
+                          {t.points}
+                        </s-table-cell>
+                        <s-table-cell>{t.after}</s-table-cell>
+                        <s-table-cell>{t.expires}</s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
+              )
+            )}
 
-      <s-section heading="Referrals">
-        <s-stack gap="base">
-          {referrals.referredBy && (
-            <s-text>
-              Referred by <Link to={`/app/customers/${referrals.referredBy.id}`} style={DARK_LINK}>{referrals.referredBy.name}</Link>{" "}
-              <s-badge tone={statusTone[referrals.referredBy.status] ?? "neutral"}>{referrals.referredBy.status.toLowerCase()}</s-badge>
-            </s-text>
-          )}
+            {tab === "codes" && (
+              codes.length === 0 ? (
+                <s-paragraph>No rewards redeemed yet.</s-paragraph>
+              ) : (
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header>Date</s-table-header>
+                    <s-table-header>Reward</s-table-header>
+                    <s-table-header>Code</s-table-header>
+                    <s-table-header>Status</s-table-header>
+                    <s-table-header format="numeric">Points</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {codes.map((r) => (
+                      <s-table-row key={r.id}>
+                        <s-table-cell>{r.at}</s-table-cell>
+                        <s-table-cell>{r.name}</s-table-cell>
+                        <s-table-cell>{r.code}</s-table-cell>
+                        <s-table-cell>
+                          <s-badge tone={r.status === "ACTIVE" ? "success" : r.status === "FAILED" ? "critical" : "neutral"}>
+                            {r.status.toLowerCase()}
+                          </s-badge>
+                        </s-table-cell>
+                        <s-table-cell>{r.points}</s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
+              )
+            )}
+          </div>
 
-          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(150px, 1fr))" gap="base">
-            <s-box padding="base" border="base" borderRadius="base" background="subdued">
-              <s-text color="subdued">Customers referred</s-text>
-              <s-heading>{referrals.totals.referred}</s-heading>
-              <s-text color="subdued">{referrals.totals.rewarded} rewarded</s-text>
-            </s-box>
-            <s-box padding="base" border="base" borderRadius="base" background="subdued">
-              <s-text color="subdued">Revenue from them</s-text>
-              <s-heading>{money(referrals.totals.revenue)}</s-heading>
-              <s-text color="subdued">{referrals.totals.orders} orders</s-text>
-            </s-box>
-            <s-box padding="base" border="base" borderRadius="base" background="subdued">
-              <s-text color="subdued">Points earned from referrals</s-text>
-              <s-heading>{referrals.totals.pointsEarned}</s-heading>
-            </s-box>
-          </s-grid>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 650, color: "#111827", marginBottom: 8 }}>Customer info</div>
+              <InfoCard
+                items={[
+                  { label: "Email", value: customer.email },
+                  { label: "Phone", value: customer.phone },
+                  { label: "Shopify customer ID", value: customer.shopifyId },
+                  { label: "Referral code", value: customer.referralCode },
+                ]}
+              />
+            </div>
 
-          {referrals.friends.length === 0 ? (
-            <s-paragraph>This customer hasn't referred anyone yet.</s-paragraph>
-          ) : (
-            <s-table>
-              <s-table-header-row>
-                <s-table-header>Customer</s-table-header>
-                <s-table-header>Status</s-table-header>
-                <s-table-header>Joined</s-table-header>
-                <s-table-header format="numeric">Orders</s-table-header>
-                <s-table-header format="numeric">Revenue</s-table-header>
-                <s-table-header format="numeric">Points earned</s-table-header>
-              </s-table-header-row>
-              <s-table-body>
-                {referrals.friends.map((f) => (
-                  <s-table-row key={f.id}>
-                    <s-table-cell>
-                      <Link to={`/app/customers/${f.id}`} style={DARK_LINK}>{f.name}</Link>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-badge tone={statusTone[f.status] ?? "neutral"}>{f.status.toLowerCase()}</s-badge>
-                    </s-table-cell>
-                    <s-table-cell>{f.joined}</s-table-cell>
-                    <s-table-cell>{f.orders}</s-table-cell>
-                    <s-table-cell>{money(f.revenue)}</s-table-cell>
-                    <s-table-cell>{f.pointsEarned}</s-table-cell>
-                  </s-table-row>
-                ))}
-              </s-table-body>
-            </s-table>
-          )}
-          <s-text color="subdued">
-            Revenue is the value of their orders after discounts (no shipping or tax), minus refunds, excluding cancelled and returned orders.
-            {referrals.converted ? ` Shown in ${referrals.currency}, converted from ${referrals.from}.` : ` Shown in ${referrals.currency}.`}
-          </s-text>
-        </s-stack>
-      </s-section>
-
-      <s-section heading="Points history">
-        {ledger.length === 0 ? (
-          <s-paragraph>No activity yet.</s-paragraph>
-        ) : (
-          <s-table>
-            <s-table-header-row>
-              <s-table-header>When</s-table-header>
-              <s-table-header>Type</s-table-header>
-              <s-table-header>Note</s-table-header>
-              <s-table-header format="numeric">Points</s-table-header>
-              <s-table-header format="numeric">Balance</s-table-header>
-              <s-table-header>Expires</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {ledger.map((t) => (
-                <s-table-row key={t.id}>
-                  <s-table-cell>{t.at}</s-table-cell>
-                  <s-table-cell>{t.type.toLowerCase()}</s-table-cell>
-                  <s-table-cell>{t.note}</s-table-cell>
-                  <s-table-cell>
-                    {t.points > 0 ? "+" : ""}
-                    {t.points}
-                  </s-table-cell>
-                  <s-table-cell>{t.after}</s-table-cell>
-                  <s-table-cell>{t.expires}</s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        )}
-      </s-section>
-
-      <s-section heading="Discount codes">
-        {codes.length === 0 ? (
-          <s-paragraph>No rewards redeemed yet.</s-paragraph>
-        ) : (
-          <s-table>
-            <s-table-header-row>
-              <s-table-header>Date</s-table-header>
-              <s-table-header>Reward</s-table-header>
-              <s-table-header>Code</s-table-header>
-              <s-table-header>Status</s-table-header>
-              <s-table-header format="numeric">Points</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {codes.map((r) => (
-                <s-table-row key={r.id}>
-                  <s-table-cell>{r.at}</s-table-cell>
-                  <s-table-cell>{r.name}</s-table-cell>
-                  <s-table-cell>{r.code}</s-table-cell>
-                  <s-table-cell>
-                    <s-badge tone={r.status === "ACTIVE" ? "success" : r.status === "FAILED" ? "critical" : "neutral"}>
-                      {r.status.toLowerCase()}
-                    </s-badge>
-                  </s-table-cell>
-                  <s-table-cell>{r.points}</s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        )}
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 650, color: "#111827", marginBottom: 8 }}>Points</div>
+              <InfoCard
+                items={[
+                  { label: "Current balance", value: String(customer.balance) },
+                  { label: "Lifetime earned", value: String(customer.lifetime) },
+                ]}
+              />
+              <s-box paddingBlockStart="base">
+                <fetcher.Form method="post">
+                  <input type="hidden" name="requestId" value={requestId} />
+                  <s-stack gap="base">
+                    <s-number-field label="Adjust points (use a minus to remove)" name="points" step="1" value="0" />
+                    <s-text-field label="Reason" name="note" placeholder="e.g. Goodwill credit" />
+                    <s-button type="submit" variant="primary" loading={fetcher.state !== "idle" || undefined}>
+                      Apply
+                    </s-button>
+                  </s-stack>
+                </fetcher.Form>
+              </s-box>
+            </div>
+          </div>
+        </div>
       </s-section>
     </s-page>
   );

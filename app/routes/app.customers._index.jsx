@@ -45,6 +45,7 @@ export const loader = async ({ request }) => {
     total,
     rows: rows.map((c) => ({
       id: c.id,
+      shopifyId: c.shopifyCustomerId || "",
       orders: ordersByCustomer.get(c.id) ?? 0,
       referred: referred.get(c.id) ?? 0,
       name: [c.firstName, c.lastName].filter(Boolean).join(" ") || "—",
@@ -71,8 +72,10 @@ export default function Customers() {
         <s-stack gap="base">
           <Form method="get">
             <s-stack direction="inline" gap="small" alignItems="end">
-              <s-search-field label="Search" labelAccessibilityVisibility="exclusive" name="q" value={q} placeholder="Search name or email" />
-              <s-button type="submit">Search</s-button>
+              <div style={{ maxWidth: 320 }}>
+                <s-search-field label="Search" labelAccessibilityVisibility="exclusive" name="q" value={q} placeholder="Search name or email" />
+              </div>
+              <s-button type="submit" icon="search" accessibilityLabel="Search" />
             </s-stack>
           </Form>
 
@@ -83,6 +86,7 @@ export default function Customers() {
           ) : (
             <s-table>
               <s-table-header-row>
+                <s-table-header>Customer ID</s-table-header>
                 <s-table-header listSlot="primary">Customer</s-table-header>
                 <s-table-header format="numeric">Orders</s-table-header>
                 <s-table-header format="numeric">Points</s-table-header>
@@ -93,6 +97,9 @@ export default function Customers() {
               <s-table-body>
                 {rows.map((c) => (
                   <s-table-row key={c.id}>
+                    <s-table-cell>
+                      <s-text color="subdued">{c.shopifyId || "Guest"}</s-text>
+                    </s-table-cell>
                     <s-table-cell>
                       <s-stack gap="small-500">
                         <Link to={`/app/customers/${c.id}`} style={DARK_LINK}>{c.name === "—" ? c.email : c.name}</Link>

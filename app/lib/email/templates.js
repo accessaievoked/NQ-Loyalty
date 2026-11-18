@@ -194,6 +194,7 @@ export function normalizeEmailStyle(s) {
   if (["left", "center", "right"].includes(s.align)) out.align = s.align;
   if (s.italic === true) out.italic = true;
   if (s.upper === true) out.upper = true;
+  if (s.plain === true) out.plain = true;
   return out;
 }
 
@@ -269,7 +270,7 @@ export const EMAIL_PRESETS = {
       heading: { size: 26, weight: "700", padTop: 14, padBottom: 6 },
       text: { size: 15, lineHeight: "1.7" },
       textMuted: { size: 13 },
-      code: { box: "#fdf2f4", color: "#d9546b", borderColor: "#f4b8c3", borderW: 1, radius: 10, boxPad: 14 },
+      code: { plain: true, color: "#d9546b", size: 24, weight: "700" },
       button: { box: "#f18599", radius: 10, boxPad: 12, size: 15, weight: "600", padTop: 18, padBottom: 30 },
     },
     append: [
@@ -684,7 +685,9 @@ function renderBlock(b, theme, vars) {
         `<div style="${textCss(st, { color: muted ? theme.muted : theme.text, size: muted ? 13 : 15, weight: "400", line: "1.55" })};${boxCss(st)}">${rich(s.text, vars, link)}</div>`);
     }
     case "code": {
-      const box = boxCss(st, 14) || `background:${theme.background};border-radius:10px;padding:14px 18px`;
+      // `plain: true` opts out of the box entirely (just the code itself); otherwise an explicit
+      // box/border/radius is honoured, or a themed callout box is the default.
+      const box = st.plain ? "" : boxCss(st, 14) || `background:${theme.background};border-radius:10px;padding:14px 18px`;
       return row(st, { t: 8, b: 8 },
         `<div style="display:inline-block;${box};font-family:ui-monospace,Menlo,Consolas,monospace;font-size:${px(st.size, px(s.size, 24))}px;font-weight:${st.weight || 800};letter-spacing:.08em;color:${isHex(st.color) ? st.color : theme.heading}">${rich(s.text, vars, link)}</div>`);
     }
